@@ -14,6 +14,7 @@ import org.jboss.logging.Logger;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -1564,7 +1565,7 @@ public class Ec2QueryHandler {
                 .elem("keyName", inst.getKeyName())
                 .elem("amiLaunchIndex", String.valueOf(inst.getAmiLaunchIndex()))
                 .elem("instanceType", inst.getInstanceType())
-                .elem("launchTime", inst.getLaunchTime() != null ? ISO_FMT.format(inst.getLaunchTime()) : "");
+                .elem("launchTime", ISO_FMT.format(inst.getLaunchTime() != null ? inst.getLaunchTime() : Instant.now()));
 
         if (inst.getPlacement() != null) {
             xml.start("placement")
@@ -1676,7 +1677,7 @@ public class Ec2QueryHandler {
                     .elem("volumeId", inst.getRootVolumeId())
                     .elem("status", "attached")
                     .elem("deleteOnTermination", "true")
-                    .elem("attachTime", inst.getLaunchTime() != null ? ISO_FMT.format(inst.getLaunchTime()) : "")
+                    .elem("attachTime", ISO_FMT.format(inst.getLaunchTime() != null ? inst.getLaunchTime() : Instant.now()))
                     .end("ebs")
                     .end("item")
                     .end("blockDeviceMapping");

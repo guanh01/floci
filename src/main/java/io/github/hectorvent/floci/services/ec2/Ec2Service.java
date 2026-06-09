@@ -1073,6 +1073,34 @@ public class Ec2Service {
         return instance != null && containerManager.isContainerRunning(instance.getDockerContainerId());
     }
 
+    public void seedInstance(String region, Instance instance) {
+        ensureDefaultResources(region);
+        if (instance.getLaunchTime() == null) {
+            instance.setLaunchTime(Instant.now());
+        }
+        if (instance.getState() == null) {
+            instance.setState(InstanceState.running());
+        }
+        instances.put(key(region, instance.getInstanceId()), instance);
+    }
+
+    public void seedSecurityGroup(String region, SecurityGroup sg) {
+        ensureDefaultResources(region);
+        if (sg.getRegion() == null) sg.setRegion(region);
+        securityGroups.put(key(region, sg.getGroupId()), sg);
+    }
+
+    public void seedVpc(String region, Vpc vpc) {
+        ensureDefaultResources(region);
+        if (vpc.getRegion() == null) vpc.setRegion(region);
+        vpcs.put(key(region, vpc.getVpcId()), vpc);
+    }
+
+    public void seedVolume(String region, Volume volume) {
+        ensureDefaultResources(region);
+        volumes.put(key(region, volume.getVolumeId()), volume);
+    }
+
     public KeyPair findKeyPair(String region, String keyName) {
         if (keyName == null) {
             return null;

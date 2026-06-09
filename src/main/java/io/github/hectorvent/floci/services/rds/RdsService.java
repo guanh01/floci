@@ -342,6 +342,33 @@ public class RdsService {
         return "floci-" + java.util.UUID.randomUUID().toString().replace("-", "");
     }
 
+    public void seedDbInstance(String id, String engine, String engineVersion,
+                               String dbInstanceClass, String masterUsername,
+                               int allocatedStorage, String status) {
+        DatabaseEngine eng = resolveEngine(engine);
+        DbInstance instance = new DbInstance(id, eng, engineVersion,
+                masterUsername, null, null, dbInstanceClass, allocatedStorage,
+                DbInstanceStatus.valueOf(status.toUpperCase()),
+                new DbEndpoint("localhost", eng.defaultPort()), false,
+                null, null, Instant.now(), 0);
+        instance.setDbiResourceId("db-seed-" + id);
+        instance.setDbInstanceArn(regionResolver.buildArn("rds", regionResolver.getDefaultRegion(), "db:" + id));
+        instances.put(id, instance);
+    }
+
+    public void seedDbCluster(String id, String engine, String engineVersion,
+                              String masterUsername, String status) {
+        DatabaseEngine eng = resolveEngine(engine);
+        DbCluster cluster = new DbCluster();
+        cluster.setDbClusterIdentifier(id);
+        cluster.setEngine(eng);
+        cluster.setEngineVersion(engineVersion);
+        cluster.setMasterUsername(masterUsername);
+        cluster.setStatus(DbInstanceStatus.valueOf(status.toUpperCase()));
+        cluster.setDbClusterArn(regionResolver.buildArn("rds", regionResolver.getDefaultRegion(), "cluster:" + id));
+        clusters.put(id, cluster);
+    }
+
     public DbInstance getDbInstance(String id) {
         return instances.get(id).orElseThrow(() ->
                 new AwsException("DBInstanceNotFound",
