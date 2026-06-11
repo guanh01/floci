@@ -609,6 +609,42 @@ public class Ec2Service {
         instances.put(key(region, instanceId), inst);
     }
 
+    public String associateIamInstanceProfile(String region, String instanceId, String profileArn) {
+        Instance inst = getRequiredInstance(region, instanceId);
+        if (inst.getIamInstanceProfileArn() != null) {
+            throw new AwsException("IncorrectState",
+                    "There is an existing association for instance " + instanceId, 400);
+        }
+        inst.setIamInstanceProfileArn(profileArn);
+        return "iip-assoc-" + randomHex(17);
+    }
+
+    public void disassociateIamInstanceProfile(String region, String associationId) {
+        for (Instance inst : instances.values()) {
+            if (inst.getIamInstanceProfileArn() != null) {
+                String expectedAssocId = "iip-assoc-" + deterministicSuffix(inst.getInstanceId(), 17);
+                if (expectedAssocId.equals(associationId)) {
+                    inst.setIamInstanceProfileArn(null);
+                    return;
+                }
+            }
+        }
+        throw new AwsException("InvalidAssociationID.NotFound",
+                "An association with ID '" + associationId + "' does not exist", 400);
+    }
+
+    private static String deterministicSuffix(String seed, int length) {
+        StringBuilder sb = new StringBuilder();
+        String alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
+        long v = ((long) seed.hashCode()) & 0xFFFFFFFFL;
+        for (int i = 0; i < length; i++) {
+            sb.append(alphabet.charAt((int) (v % alphabet.length())));
+            v = v * 1103515245L + 12345L + i;
+            v &= 0xFFFFFFFFL;
+        }
+        return sb.toString();
+    }
+
     private Instance getRequiredInstance(String region, String instanceId) {
         Instance inst = instances.get(key(region, instanceId)).orElse(null);
         if (inst == null)

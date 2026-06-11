@@ -43,6 +43,8 @@ public class Ec2QueryHandler {
                 case "DescribeInstances" -> handleDescribeInstances(params, region);
                 case "DescribeIamInstanceProfileAssociations" ->
                         handleDescribeIamInstanceProfileAssociations(params, region);
+                case "AssociateIamInstanceProfile" -> handleAssociateIamInstanceProfile(params, region);
+                case "DisassociateIamInstanceProfile" -> handleDisassociateIamInstanceProfile(params, region);
                 case "TerminateInstances" -> handleTerminateInstances(params, region);
                 case "StartInstances" -> handleStartInstances(params, region);
                 case "StopInstances" -> handleStopInstances(params, region);
@@ -352,6 +354,40 @@ public class Ec2QueryHandler {
         }
         xml.end("iamInstanceProfileAssociationSet")
                 .end("DescribeIamInstanceProfileAssociationsResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleAssociateIamInstanceProfile(MultivaluedMap<String, String> p, String region) {
+        String instanceId = p.getFirst("InstanceId");
+        String profileArn = p.getFirst("IamInstanceProfile.Arn");
+        String assocId = service.associateIamInstanceProfile(region, instanceId, profileArn);
+        XmlBuilder xml = new XmlBuilder()
+                .start("AssociateIamInstanceProfileResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("iamInstanceProfileAssociation")
+                .elem("associationId", assocId)
+                .elem("instanceId", instanceId)
+                .start("iamInstanceProfile")
+                .elem("arn", profileArn != null ? profileArn : "")
+                .elem("id", iamInstanceProfileId(instanceId))
+                .end("iamInstanceProfile")
+                .elem("state", "associated")
+                .end("iamInstanceProfileAssociation")
+                .end("AssociateIamInstanceProfileResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleDisassociateIamInstanceProfile(MultivaluedMap<String, String> p, String region) {
+        String associationId = p.getFirst("AssociationId");
+        service.disassociateIamInstanceProfile(region, associationId);
+        XmlBuilder xml = new XmlBuilder()
+                .start("DisassociateIamInstanceProfileResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("iamInstanceProfileAssociation")
+                .elem("associationId", associationId)
+                .elem("state", "disassociated")
+                .end("iamInstanceProfileAssociation")
+                .end("DisassociateIamInstanceProfileResponse");
         return xmlResponse(xml.build());
     }
 
