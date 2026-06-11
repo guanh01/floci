@@ -465,6 +465,41 @@ public class RdsService {
         return instance;
     }
 
+    public DbInstance stopDbInstance(String id) {
+        DbInstance instance = getDbInstance(id);
+
+        if (instance.getStatus() == DbInstanceStatus.STOPPED) {
+            throw new AwsException("InvalidDBInstanceState",
+                    "DB instance " + id + " is already stopped.", 400);
+        }
+        if (instance.getStatus() != DbInstanceStatus.AVAILABLE) {
+            throw new AwsException("InvalidDBInstanceState",
+                    "DB instance " + id + " is not in available state.", 400);
+        }
+
+        instance.setStatus(DbInstanceStatus.STOPPED);
+        instances.put(id, instance);
+        proxyManager.stopProxy(id);
+
+        LOG.infov("DB instance {0} stopped", id);
+        return instance;
+    }
+
+    public DbInstance startDbInstance(String id) {
+        DbInstance instance = getDbInstance(id);
+
+        if (instance.getStatus() != DbInstanceStatus.STOPPED) {
+            throw new AwsException("InvalidDBInstanceState",
+                    "DB instance " + id + " is not in stopped state.", 400);
+        }
+
+        instance.setStatus(DbInstanceStatus.AVAILABLE);
+        instances.put(id, instance);
+
+        LOG.infov("DB instance {0} started", id);
+        return instance;
+    }
+
     public void deleteDbInstance(String id) {
         DbInstance instance = instances.get(id).orElseThrow(() ->
                 new AwsException("DBInstanceNotFound", "DB instance " + id + " not found.", 404));

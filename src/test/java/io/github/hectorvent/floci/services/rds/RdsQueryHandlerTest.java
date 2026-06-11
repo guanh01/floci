@@ -471,6 +471,71 @@ class RdsQueryHandlerTest {
         assertTrue(((String) response.getEntity()).contains("DBClusterParameterGroupName is required."));
     }
 
+    // ──────────────────────────── Stop/Start DBInstance ────────────────────────────
+
+    @Test
+    void stopDbInstance_requiresIdentifier() {
+        Response response = handler.handle("StopDBInstance", params());
+
+        assertEquals(400, response.getStatus());
+        assertTrue(((String) response.getEntity()).contains("DBInstanceIdentifier is required."));
+    }
+
+    @Test
+    void stopDbInstance_callsServiceAndReturnsXml() {
+        DbInstance instance = makeInstance("mydb");
+        instance.setStatus(DbInstanceStatus.STOPPED);
+        when(service.stopDbInstance("mydb")).thenReturn(instance);
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBInstanceIdentifier", "mydb");
+        Response response = handler.handle("StopDBInstance", p);
+
+        assertEquals(200, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<DBInstanceIdentifier>mydb</DBInstanceIdentifier>"));
+        assertTrue(body.contains("<DBInstanceStatus>stopped</DBInstanceStatus>"));
+        verify(service).stopDbInstance("mydb");
+    }
+
+    @Test
+    void startDbInstance_requiresIdentifier() {
+        Response response = handler.handle("StartDBInstance", params());
+
+        assertEquals(400, response.getStatus());
+        assertTrue(((String) response.getEntity()).contains("DBInstanceIdentifier is required."));
+    }
+
+    @Test
+    void startDbInstance_callsServiceAndReturnsXml() {
+        DbInstance instance = makeInstance("mydb");
+        instance.setStatus(DbInstanceStatus.AVAILABLE);
+        when(service.startDbInstance("mydb")).thenReturn(instance);
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBInstanceIdentifier", "mydb");
+        Response response = handler.handle("StartDBInstance", p);
+
+        assertEquals(200, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<DBInstanceIdentifier>mydb</DBInstanceIdentifier>"));
+        assertTrue(body.contains("<DBInstanceStatus>available</DBInstanceStatus>"));
+        verify(service).startDbInstance("mydb");
+    }
+
+    @Test
+    void stopDbInstance_propagatesServiceException() {
+        when(service.stopDbInstance("mydb")).thenThrow(
+                new AwsException("InvalidDBInstanceState", "DB instance mydb is already stopped.", 400));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBInstanceIdentifier", "mydb");
+        Response response = handler.handle("StopDBInstance", p);
+
+        assertEquals(400, response.getStatus());
+        assertTrue(((String) response.getEntity()).contains("InvalidDBInstanceState"));
+    }
+
     // ──────────────────────────── DBSubnetGroup shape ───────────────────────────
 
     @Test

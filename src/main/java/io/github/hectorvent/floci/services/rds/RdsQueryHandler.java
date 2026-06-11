@@ -72,6 +72,8 @@ public class RdsQueryHandler {
                 case "AddTagsToResource" -> handleAddTagsToResource(params);
                 case "ListTagsForResource" -> handleListTagsForResource(params);
                 case "RemoveTagsFromResource" -> handleRemoveTagsFromResource(params);
+                case "StopDBInstance" -> handleStopDbInstance(params);
+                case "StartDBInstance" -> handleStartDbInstance(params);
                 default -> AwsQueryResponse.error("UnsupportedOperation",
                         "Operation " + action + " is not supported.", AwsNamespaces.RDS, 400);
             };
@@ -305,6 +307,34 @@ public class RdsQueryHandler {
             DbInstance instance = service.rebootDbInstance(id);
             String result = dbInstanceXml(instance);
             return Response.ok(AwsQueryResponse.envelope("RebootDBInstance", AwsNamespaces.RDS, result)).build();
+        } catch (AwsException e) {
+            return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.RDS, e.getHttpStatus());
+        }
+    }
+
+    private Response handleStopDbInstance(MultivaluedMap<String, String> params) {
+        String id = params.getFirst("DBInstanceIdentifier");
+        if (id == null || id.isBlank()) {
+            return AwsQueryResponse.error("InvalidParameterValue", "DBInstanceIdentifier is required.", AwsNamespaces.RDS, 400);
+        }
+        try {
+            DbInstance instance = service.stopDbInstance(id);
+            String result = dbInstanceXml(instance);
+            return Response.ok(AwsQueryResponse.envelope("StopDBInstance", AwsNamespaces.RDS, result)).build();
+        } catch (AwsException e) {
+            return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.RDS, e.getHttpStatus());
+        }
+    }
+
+    private Response handleStartDbInstance(MultivaluedMap<String, String> params) {
+        String id = params.getFirst("DBInstanceIdentifier");
+        if (id == null || id.isBlank()) {
+            return AwsQueryResponse.error("InvalidParameterValue", "DBInstanceIdentifier is required.", AwsNamespaces.RDS, 400);
+        }
+        try {
+            DbInstance instance = service.startDbInstance(id);
+            String result = dbInstanceXml(instance);
+            return Response.ok(AwsQueryResponse.envelope("StartDBInstance", AwsNamespaces.RDS, result)).build();
         } catch (AwsException e) {
             return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.RDS, e.getHttpStatus());
         }
@@ -772,6 +802,9 @@ public class RdsQueryHandler {
             case DELETING -> "deleting";
             case REBOOTING -> "rebooting";
             case MODIFYING -> "modifying";
+            case STOPPING -> "stopping";
+            case STOPPED -> "stopped";
+            case STARTING -> "starting";
         };
     }
 
