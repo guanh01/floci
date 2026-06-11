@@ -63,6 +63,9 @@ public class Ec2QueryHandler {
                 case "CreateDefaultVpc" -> handleCreateDefaultVpc(params, region);
                 case "AssociateVpcCidrBlock" -> handleAssociateVpcCidrBlock(params, region);
                 case "DisassociateVpcCidrBlock" -> handleDisassociateVpcCidrBlock(params, region);
+                // Flow Logs
+                case "CreateFlowLogs" -> handleCreateFlowLogs(params, region);
+                case "DescribeFlowLogs" -> handleDescribeFlowLogs(params, region);
                 // Subnets
                 case "CreateSubnet" -> handleCreateSubnet(params, region);
                 case "DescribeSubnets" -> handleDescribeSubnets(params, region);
@@ -2109,5 +2112,59 @@ public class Ec2QueryHandler {
         }
         xml.end(wrapperTag);
         return xml.build();
+    }
+
+    // ── Flow Logs ───────────────────────────────────────────
+
+    private Response handleCreateFlowLogs(MultivaluedMap<String, String> p, String region) {
+        List<String> resourceIds = getList(p, "ResourceId");
+        String resourceType = p.getFirst("ResourceType") != null ? p.getFirst("ResourceType") : "VPC";
+        String trafficType = p.getFirst("TrafficType") != null ? p.getFirst("TrafficType") : "ALL";
+        String logDestinationType = p.getFirst("LogDestinationType") != null ? p.getFirst("LogDestinationType") : "cloud-watch-logs";
+        String logDestination = p.getFirst("LogDestination");
+        String logGroupName = p.getFirst("LogGroupName");
+
+        List<FlowLog> created = service.createFlowLogs(region, resourceIds, resourceType,
+                trafficType, logDestinationType, logDestination, logGroupName);
+
+        XmlBuilder xml = new XmlBuilder()
+                .start("CreateFlowLogsResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("flowLogIdSet");
+        for (FlowLog fl : created) {
+            xml.start("item").raw(fl.getFlowLogId()).end("item");
+        }
+        xml.end("flowLogIdSet")
+                .start("unsuccessful")
+                .end("unsuccessful")
+                .end("CreateFlowLogsResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleDescribeFlowLogs(MultivaluedMap<String, String> p, String region) {
+        List<String> flowLogIds = getList(p, "FlowLogId");
+        List<FlowLog> results = service.describeFlowLogs(region, flowLogIds);
+
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeFlowLogsResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("flowLogSet");
+        for (FlowLog fl : results) {
+            xml.start("item")
+                    .elem("flowLogId", fl.getFlowLogId())
+                    .elem("resourceId", fl.getResourceId())
+                    .elem("resourceType", fl.getResourceType())
+                    .elem("trafficType", fl.getTrafficType())
+                    .elem("logDestinationType", fl.getLogDestinationType())
+                    .elem("logDestination", fl.getLogDestination() != null ? fl.getLogDestination() : "")
+                    .elem("logGroupName", fl.getLogGroupName() != null ? fl.getLogGroupName() : "")
+                    .elem("deliverLogsStatus", fl.getDeliverLogsStatus())
+                    .elem("flowLogStatus", fl.getFlowLogStatus())
+                    .elem("creationTime", fl.getCreationTime())
+                    .end("item");
+        }
+        xml.end("flowLogSet")
+                .end("DescribeFlowLogsResponse");
+        return xmlResponse(xml.build());
     }
 }

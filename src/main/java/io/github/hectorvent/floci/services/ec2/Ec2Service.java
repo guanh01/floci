@@ -29,6 +29,7 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.ec2.model.Address;
+import io.github.hectorvent.floci.services.ec2.model.FlowLog;
 import io.github.hectorvent.floci.services.ec2.model.GroupIdentifier;
 import io.github.hectorvent.floci.services.ec2.model.Image;
 import io.github.hectorvent.floci.services.ec2.model.Instance;
@@ -93,6 +94,7 @@ public class Ec2Service {
     private final StorageBackend<String, LaunchTemplate> launchTemplates;
     private final StorageBackend<String, VpcEndpoint> vpcEndpoints;
     private final StorageBackend<String, NatGateway> natGateways;
+    private final Map<String, FlowLog> flowLogs = new ConcurrentHashMap<>();
     // resourceId → List<Tag>
     private final StorageBackend<String, List<Tag>> tags;
     private final Set<String> seededRegions = ConcurrentHashMap.newKeySet();
@@ -2289,5 +2291,28 @@ public class Ec2Service {
         return addresses.scan(k -> true).stream()
                 .filter(a -> instanceId.equals(a.getInstanceId()) && a.getAssociationId() != null)
                 .findFirst();
+    }
+
+    public List<FlowLog> createFlowLogs(String region, List<String> resourceIds,
+                                         String resourceType, String trafficType,
+                                         String logDestinationType, String logDestination,
+                                         String logGroupName) {
+        List<FlowLog> created = new ArrayList<>();
+        for (String resourceId : resourceIds) {
+            String flId = "fl-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 17);
+            FlowLog fl = new FlowLog(flId, resourceId, resourceType, trafficType,
+                    logDestinationType, logDestination, logGroupName);
+            flowLogs.put(region + ":" + flId, fl);
+            created.add(fl);
+        }
+        return created;
+    }
+
+    public List<FlowLog> describeFlowLogs(String region, List<String> flowLogIds) {
+        return flowLogs.entrySet().stream()
+                .filter(e -> e.getKey().startsWith(region + ":"))
+                .map(Map.Entry::getValue)
+                .filter(fl -> flowLogIds.isEmpty() || flowLogIds.contains(fl.getFlowLogId()))
+                .collect(Collectors.toList());
     }
 }
