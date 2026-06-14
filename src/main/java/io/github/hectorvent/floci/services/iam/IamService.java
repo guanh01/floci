@@ -850,6 +850,72 @@ public class IamService {
     }
 
     // =========================================================================
+    // Service-Linked Roles
+    // =========================================================================
+
+    /**
+     * Creates a service-linked role for the specified AWS service.
+     * Service-linked roles have a fixed path of {@code /aws-service-role/<service>/}
+     * and a generated role name based on the service.
+     */
+    public IamRole createServiceLinkedRole(String awsServiceName, String description, String customSuffix) {
+        // Derive role name: AWSServiceRoleFor<ServiceShortName>
+        String servicePart = awsServiceName;
+        if (servicePart.endsWith(".amazonaws.com")) {
+            servicePart = servicePart.substring(0, servicePart.indexOf(".amazonaws.com"));
+        }
+        // Capitalize first letter of each dot-separated segment
+        StringBuilder roleNameBuilder = new StringBuilder("AWSServiceRoleFor");
+        for (String segment : servicePart.split("\\.")) {
+            if (!segment.isEmpty()) {
+                roleNameBuilder.append(Character.toUpperCase(segment.charAt(0)));
+                if (segment.length() > 1) roleNameBuilder.append(segment.substring(1));
+            }
+        }
+        if (customSuffix != null && !customSuffix.isEmpty()) {
+            roleNameBuilder.append("_").append(customSuffix);
+        }
+        String roleName = roleNameBuilder.toString();
+
+        // If the role already exists, return it (idempotent)
+        Optional<IamRole> existing = roles.get(roleName);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+
+        String roleId = "AROA" + randomId(16);
+        String path = "/aws-service-role/" + awsServiceName + "/";
+        String arn = iamArn("role", path, roleName);
+        String trustPolicy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\","
+                + "\"Principal\":{\"Service\":\"" + awsServiceName + "\"},\"Action\":\"sts:AssumeRole\"}]}";
+        IamRole role = new IamRole(roleId, roleName, path, arn, trustPolicy);
+        role.setDescription(description != null ? description : "Service-linked role for " + awsServiceName);
+        roles.put(roleName, role);
+        LOG.infov("Created service-linked role: {0}", roleName);
+        return role;
+    }
+
+    // =========================================================================
+    // Account Password Policy
+    // =========================================================================
+
+    /**
+     * Updates the account password policy. This is a stub implementation —
+     * it accepts all parameters and returns success without persisting state,
+     * since CloudRail only needs the operation to not error out.
+     */
+    public void updateAccountPasswordPolicy(Integer minimumPasswordLength, Boolean requireSymbols,
+                                             Boolean requireNumbers, Boolean requireUppercaseCharacters,
+                                             Boolean requireLowercaseCharacters, Boolean allowUsersToChangePassword,
+                                             Integer maxPasswordAge, Integer passwordReusePrevention,
+                                             Boolean hardExpiry) {
+        LOG.infov("UpdateAccountPasswordPolicy called (stub): minLength={0}, requireSymbols={1}",
+                minimumPasswordLength, requireSymbols);
+        // No-op stub: we accept the request and return success.
+        // CloudRail's simulation only needs the API call to succeed.
+    }
+
+    // =========================================================================
     // Internal helpers
     // =========================================================================
 

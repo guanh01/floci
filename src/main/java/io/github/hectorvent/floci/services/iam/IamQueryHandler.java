@@ -148,6 +148,12 @@ public class IamQueryHandler {
             // Policy Simulation
             case "SimulatePrincipalPolicy" -> handleSimulatePrincipalPolicy(params);
 
+            // Service-Linked Roles
+            case "CreateServiceLinkedRole" -> handleCreateServiceLinkedRole(params);
+
+            // Account Password Policy
+            case "UpdateAccountPasswordPolicy" -> handleUpdateAccountPasswordPolicy(params);
+
             default -> AwsQueryResponse.error("UnsupportedOperation",
                     "Operation " + action + " is not supported.", AwsNamespaces.IAM, 400);
             };
@@ -751,6 +757,38 @@ public class IamQueryHandler {
     }
 
     // =========================================================================
+    // Service-Linked Roles
+    // =========================================================================
+
+    private Response handleCreateServiceLinkedRole(MultivaluedMap<String, String> params) {
+        String awsServiceName = getParam(params, "AWSServiceName");
+        String description = getParam(params, "Description");
+        String customSuffix = getParam(params, "CustomSuffix");
+        IamRole role = iamService.createServiceLinkedRole(awsServiceName, description, customSuffix);
+        String result = new XmlBuilder().start("Role").raw(roleXml(role)).end("Role").build();
+        return Response.ok(AwsQueryResponse.envelope("CreateServiceLinkedRole", AwsNamespaces.IAM, result)).build();
+    }
+
+    // =========================================================================
+    // Account Password Policy
+    // =========================================================================
+
+    private Response handleUpdateAccountPasswordPolicy(MultivaluedMap<String, String> params) {
+        Integer minLength = getOptionalIntParam(params, "MinimumPasswordLength");
+        Boolean requireSymbols = getOptionalBoolParam(params, "RequireSymbols");
+        Boolean requireNumbers = getOptionalBoolParam(params, "RequireNumbers");
+        Boolean requireUpper = getOptionalBoolParam(params, "RequireUppercaseCharacters");
+        Boolean requireLower = getOptionalBoolParam(params, "RequireLowercaseCharacters");
+        Boolean allowChange = getOptionalBoolParam(params, "AllowUsersToChangePassword");
+        Integer maxAge = getOptionalIntParam(params, "MaxPasswordAge");
+        Integer reusePrevention = getOptionalIntParam(params, "PasswordReusePrevention");
+        Boolean hardExpiry = getOptionalBoolParam(params, "HardExpiry");
+        iamService.updateAccountPasswordPolicy(minLength, requireSymbols, requireNumbers,
+                requireUpper, requireLower, allowChange, maxAge, reusePrevention, hardExpiry);
+        return Response.ok(AwsQueryResponse.envelopeNoResult("UpdateAccountPasswordPolicy", AwsNamespaces.IAM)).build();
+    }
+
+    // =========================================================================
     // XML serialization helpers
     // =========================================================================
 
@@ -928,6 +966,22 @@ public class IamQueryHandler {
         } catch (NumberFormatException e) {
             return defaultValue;
         }
+    }
+
+    private Integer getOptionalIntParam(MultivaluedMap<String, String> params, String name) {
+        String value = params.getFirst(name);
+        if (value == null) return null;
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Boolean getOptionalBoolParam(MultivaluedMap<String, String> params, String name) {
+        String value = params.getFirst(name);
+        if (value == null) return null;
+        return "true".equalsIgnoreCase(value);
     }
 
     Response xmlErrorResponse(String code, String message, int status) {

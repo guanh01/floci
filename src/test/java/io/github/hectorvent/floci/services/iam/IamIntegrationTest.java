@@ -823,4 +823,74 @@ class IamIntegrationTest {
             .statusCode(400)
             .body("ErrorResponse.Error.Code", equalTo("UnsupportedOperation"));
     }
+
+    // =========================================================================
+    // Service-Linked Roles
+    // =========================================================================
+
+    @Test
+    @Order(80)
+    void createServiceLinkedRole() {
+        given()
+            .formParam("Action", "CreateServiceLinkedRole")
+            .formParam("AWSServiceName", "ssm.amazonaws.com")
+            .formParam("Description", "Role for SSM")
+            .header("Authorization",
+                    "AWS4-HMAC-SHA256 Credential=test/20260227/us-east-1/iam/aws4_request")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("CreateServiceLinkedRoleResponse.CreateServiceLinkedRoleResult.Role.RoleName",
+                    equalTo("AWSServiceRoleForSsm"))
+            .body("CreateServiceLinkedRoleResponse.CreateServiceLinkedRoleResult.Role.RoleId",
+                    startsWith("AROA"))
+            .body("CreateServiceLinkedRoleResponse.CreateServiceLinkedRoleResult.Role.Path",
+                    equalTo("/aws-service-role/ssm.amazonaws.com/"))
+            .body("CreateServiceLinkedRoleResponse.CreateServiceLinkedRoleResult.Role.Arn",
+                    containsString("role/aws-service-role/ssm.amazonaws.com/AWSServiceRoleForSsm"));
+    }
+
+    @Test
+    @Order(81)
+    void createServiceLinkedRoleIsIdempotent() {
+        // Calling again with same service should return the same role (no error)
+        given()
+            .formParam("Action", "CreateServiceLinkedRole")
+            .formParam("AWSServiceName", "ssm.amazonaws.com")
+            .header("Authorization",
+                    "AWS4-HMAC-SHA256 Credential=test/20260227/us-east-1/iam/aws4_request")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("CreateServiceLinkedRoleResponse.CreateServiceLinkedRoleResult.Role.RoleName",
+                    equalTo("AWSServiceRoleForSsm"));
+    }
+
+    // =========================================================================
+    // Account Password Policy
+    // =========================================================================
+
+    @Test
+    @Order(90)
+    void updateAccountPasswordPolicy() {
+        given()
+            .formParam("Action", "UpdateAccountPasswordPolicy")
+            .formParam("MinimumPasswordLength", "14")
+            .formParam("RequireSymbols", "true")
+            .formParam("RequireNumbers", "true")
+            .formParam("RequireUppercaseCharacters", "true")
+            .formParam("RequireLowercaseCharacters", "true")
+            .formParam("AllowUsersToChangePassword", "true")
+            .formParam("MaxPasswordAge", "90")
+            .formParam("PasswordReusePrevention", "24")
+            .formParam("HardExpiry", "false")
+            .header("Authorization",
+                    "AWS4-HMAC-SHA256 Credential=test/20260227/us-east-1/iam/aws4_request")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
 }
