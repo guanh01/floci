@@ -143,6 +143,39 @@ public class KmsService {
         return key;
     }
 
+    /**
+     * Seed a KMS key with a specific KeyId and ARN — used by the admin seed_raw endpoint.
+     * Unlike createKey(), this injects a key with the exact KeyId/ARN from real AWS,
+     * bypassing UUID generation.
+     */
+    public KmsKey seedKey(String keyId, String arn, String description,
+                          String keyState, String keyUsage, String keySpec,
+                          boolean rotationEnabled, String region) {
+        if (keyId == null || keyId.isBlank()) {
+            throw new AwsException("ValidationException", "KeyId is required for seeding.", 400);
+        }
+        String storeKey = region + "::" + keyId;
+        if (keyStore.get(storeKey).isPresent()) {
+            return keyStore.get(storeKey).get();
+        }
+
+        KmsKey key = new KmsKey();
+        key.setKeyId(keyId);
+        key.setArn(arn != null ? arn : regionResolver.buildArn("kms", region, "key/" + keyId));
+        key.setDescription(description != null ? description : "");
+        key.setKeyState(keyState != null ? keyState : "Enabled");
+        key.setEnabled(!"Disabled".equals(keyState) && !"PendingDeletion".equals(keyState));
+        key.setKeyUsage(keyUsage != null ? keyUsage : "ENCRYPT_DECRYPT");
+        key.setCustomerMasterKeySpec(keySpec != null ? keySpec : "SYMMETRIC_DEFAULT");
+        key.setKeyRotationEnabled(rotationEnabled);
+
+        generateKeyMaterial(key);
+
+        keyStore.put(storeKey, key);
+        LOG.infov("Seeded KMS key: {0} ({1}/{2}) in {3}", keyId, key.getKeyUsage(), key.getCustomerMasterKeySpec(), region);
+        return key;
+    }
+
     private String resolveKeyId(Map<String, String> tags) {
         String overrideId = ReservedTags.extractOverrideId(tags);
         if (overrideId == null) {

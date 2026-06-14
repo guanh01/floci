@@ -188,6 +188,34 @@ public class SnsService {
         return topic;
     }
 
+    /**
+     * Seed a topic with a specific ARN — used by the admin seed_raw endpoint.
+     * Unlike createTopic(), this injects a topic with the exact ARN provided
+     * (from real AWS), bypassing the regionResolver ARN generation.
+     */
+    public Topic seedTopic(String topicArn, Map<String, String> attributes,
+                           Map<String, String> tags, String region) {
+        if (topicArn == null || topicArn.isBlank()) {
+            throw new AwsException("InvalidParameter", "TopicArn is required for seeding.", 400);
+        }
+        String key = topicKey(region, topicArn);
+
+        Topic existing = topicStore.get(key).orElse(null);
+        if (existing != null) return existing;
+
+        // Extract the topic name from the ARN (last segment after ':')
+        String name = topicArn.contains(":") ?
+                topicArn.substring(topicArn.lastIndexOf(':') + 1) : topicArn;
+
+        Topic topic = new Topic(name, topicArn);
+        if (attributes != null) topic.getAttributes().putAll(attributes);
+        if (tags != null) topic.getTags().putAll(tags);
+
+        topicStore.put(key, topic);
+        LOG.infov("Seeded SNS topic: {0} (ARN: {1}) in region {2}", name, topicArn, region);
+        return topic;
+    }
+
     public void deleteTopic(String topicArn, String region) {
         String key = topicKey(region, topicArn);
         if (topicStore.get(key).isEmpty()) {
