@@ -44,6 +44,7 @@ import io.github.hectorvent.floci.services.ec2.model.InternetGateway;
 import io.github.hectorvent.floci.services.ec2.model.InternetGatewayAttachment;
 import io.github.hectorvent.floci.services.ec2.model.IpPermission;
 import io.github.hectorvent.floci.services.ec2.model.IpRange;
+import io.github.hectorvent.floci.services.ec2.model.Ipv6Range;
 import io.github.hectorvent.floci.services.ec2.model.KeyPair;
 import io.github.hectorvent.floci.services.ec2.model.LaunchTemplate;
 import io.github.hectorvent.floci.services.ec2.model.LaunchTemplateData;
@@ -905,6 +906,14 @@ public class Ec2Service {
     public List<SecurityGroup> describeSecurityGroups(String region, List<String> groupIds,
                                                        List<String> groupNames, Map<String, List<String>> filters) {
         ensureDefaultResources(region);
+        if (!groupIds.isEmpty()) {
+            for (String id : groupIds) {
+                if (securityGroups.get(key(region, id)).isEmpty()) {
+                    throw new AwsException("InvalidGroup.NotFound",
+                            "The security group '" + id + "' does not exist", 400);
+                }
+            }
+        }
         return securityGroups.scan(k -> true).stream()
                 .filter(sg -> sg.getRegion().equals(region))
                 .filter(sg -> groupIds.isEmpty() || groupIds.contains(sg.getGroupId()))
@@ -984,7 +993,7 @@ public class Ec2Service {
         ensureDefaultResources(region);
         SecurityGroup sg = getRequiredSecurityGroup(region, groupId);
 
-        sg.getIpPermissions().removeIf(p -> matchesAnyPermission(p, permissions));
+        revokePermissions(sg.getIpPermissions(), permissions);
         securityGroups.put(key(region, groupId), sg);
     }
 
@@ -992,7 +1001,7 @@ public class Ec2Service {
         ensureDefaultResources(region);
         SecurityGroup sg = getRequiredSecurityGroup(region, groupId);
 
-        sg.getIpPermissionsEgress().removeIf(p -> matchesAnyPermission(p, permissions));
+        revokePermissions(sg.getIpPermissionsEgress(), permissions);
         securityGroups.put(key(region, groupId), sg);
     }
 
@@ -1004,15 +1013,51 @@ public class Ec2Service {
         return sg;
     }
 
-    private boolean matchesAnyPermission(IpPermission existing, List<IpPermission> toRemove) {
-        for (IpPermission perm : toRemove) {
-            if (Objects.equals(existing.getIpProtocol(), perm.getIpProtocol())
-                    && Objects.equals(existing.getFromPort(), perm.getFromPort())
-                    && Objects.equals(existing.getToPort(), perm.getToPort())) {
-                return true;
+    /**
+     * Revoke specific permissions from a list.  On real AWS, revoking removes
+     * only the specified CIDRs/IPv6 ranges from matching rules.  If all CIDRs
+     * are removed, the entire rule is removed.  If the revoke request has no
+     * CIDRs (or empty ranges), the entire matching rule is removed.
+     */
+    private void revokePermissions(List<IpPermission> existing, List<IpPermission> toRemove) {
+        for (IpPermission revoke : toRemove) {
+            boolean hasCidrs = (revoke.getIpRanges() != null && !revoke.getIpRanges().isEmpty());
+            boolean hasIpv6Cidrs = (revoke.getIpv6Ranges() != null && !revoke.getIpv6Ranges().isEmpty());
+
+            if (!hasCidrs && !hasIpv6Cidrs) {
+                // No specific CIDRs: remove entire matching rule by protocol/port
+                existing.removeIf(p -> matchesProtocolAndPort(p, revoke));
+            } else {
+                // Remove only the specified CIDRs from matching rules
+                List<IpPermission> toDelete = new ArrayList<>();
+                for (IpPermission perm : existing) {
+                    if (!matchesProtocolAndPort(perm, revoke)) continue;
+
+                    if (hasCidrs) {
+                        Set<String> cidrsToRemove = revoke.getIpRanges().stream()
+                                .map(IpRange::getCidrIp).collect(Collectors.toSet());
+                        perm.getIpRanges().removeIf(r -> cidrsToRemove.contains(r.getCidrIp()));
+                    }
+                    if (hasIpv6Cidrs) {
+                        Set<String> ipv6CidrsToRemove = revoke.getIpv6Ranges().stream()
+                                .map(Ipv6Range::getCidrIpv6).collect(Collectors.toSet());
+                        perm.getIpv6Ranges().removeIf(r -> ipv6CidrsToRemove.contains(r.getCidrIpv6()));
+                    }
+                    // If no ranges remain, mark for removal
+                    if (perm.getIpRanges().isEmpty() && perm.getIpv6Ranges().isEmpty()
+                            && perm.getUserIdGroupPairs().isEmpty()) {
+                        toDelete.add(perm);
+                    }
+                }
+                existing.removeAll(toDelete);
             }
         }
-        return false;
+    }
+
+    private boolean matchesProtocolAndPort(IpPermission existing, IpPermission toMatch) {
+        return Objects.equals(existing.getIpProtocol(), toMatch.getIpProtocol())
+                && Objects.equals(existing.getFromPort(), toMatch.getFromPort())
+                && Objects.equals(existing.getToPort(), toMatch.getToPort());
     }
 
     public List<SecurityGroupRule> describeSecurityGroupRules(String region, String groupId, List<String> ruleIds) {
@@ -2012,6 +2057,12 @@ public class Ec2Service {
                 case "group-id" -> matchesValue(values, sg.getGroupId());
                 case "group-name" -> matchesValue(values, sg.getGroupName());
                 case "vpc-id" -> matchesValue(values, sg.getVpcId());
+                case "ip-permission.cidr" -> sg.getIpPermissions().stream()
+                        .anyMatch(perm -> perm.getIpRanges().stream()
+                                .anyMatch(r -> values.contains(r.getCidrIp())));
+                case "ip-permission.ipv6-cidr" -> sg.getIpPermissions().stream()
+                        .anyMatch(perm -> perm.getIpv6Ranges().stream()
+                                .anyMatch(r -> values.contains(r.getCidrIpv6())));
                 default -> true;
             };
         }
