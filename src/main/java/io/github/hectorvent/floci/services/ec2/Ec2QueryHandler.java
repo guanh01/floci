@@ -95,6 +95,7 @@ public class Ec2QueryHandler {
                 // AMIs
                 case "DescribeImages" -> handleDescribeImages(params, region);
                 case "CreateImage" -> handleCreateImage(params, region);
+                case "DeregisterImage" -> handleDeregisterImage(params, region);
                 // Snapshots
                 case "CreateSnapshot" -> handleCreateSnapshot(params, region);
                 case "DescribeSnapshots" -> handleDescribeSnapshots(params, region);
@@ -1060,6 +1061,12 @@ public class Ec2QueryHandler {
                 .elem("imageId", image.getImageId())
                 .end("CreateImageResponse");
         return xmlResponse(xml.build());
+    }
+
+    private Response handleDeregisterImage(MultivaluedMap<String, String> p, String region) {
+        String imageId = p.getFirst("ImageId");
+        service.deregisterImage(region, imageId);
+        return booleanResponse("DeregisterImage");
     }
 
     // ─── Snapshot handlers ────────────────────────────────────────────────────

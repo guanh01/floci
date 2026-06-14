@@ -2436,6 +2436,30 @@ public class Ec2Service {
         return result;
     }
 
+    /**
+     * Seed an image directly into the mutable store.
+     * Used by the admin seed endpoint to inject pre-existing AMI state.
+     */
+    public void seedImage(String region, Image image) {
+        ensureDefaultResources(region);
+        if (image.getState() == null) {
+            image.setState("available");
+        }
+        images.put(key(region, image.getImageId()), image);
+    }
+
+    /**
+     * Deregister (delete) an AMI from the mutable store.
+     * Mirrors real AWS DeregisterImage behavior.
+     */
+    public void deregisterImage(String region, String imageId) {
+        ensureDefaultResources(region);
+        if (images.remove(key(region, imageId)) == null) {
+            throw new AwsException("InvalidAMIID.NotFound",
+                    "The image id '[" + imageId + "]' does not exist", 400);
+        }
+    }
+
     // ─── Snapshots ────────────────────────────────────────────────────────────
 
     private final Map<String, Snapshot> snapshots = new ConcurrentHashMap<>();

@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.lifecycle;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.services.ec2.Ec2Service;
+import io.github.hectorvent.floci.services.ec2.model.Image;
 import io.github.hectorvent.floci.services.ec2.model.Volume;
 import io.github.hectorvent.floci.services.ec2.model.Tag;
 import io.github.hectorvent.floci.services.ec2.model.VolumeAttachment;
@@ -216,6 +217,9 @@ public class SeedRawController {
         if ("AWS::EC2::Volume".equals(resourceType)) {
             return seedRawVolume(body, region);
         }
+        if ("AWS::EC2::Image".equals(resourceType)) {
+            return seedRawImage(body, region);
+        }
         // For other EC2 resource types, log a warning and return 0
         LOG.warnv("seed_raw/ec2: unsupported ResourceType: {0}", resourceType);
         return 0;
@@ -287,6 +291,64 @@ public class SeedRawController {
         }
 
         ec2Service.seedVolume(region, vol);
+        return 1;
+    }
+
+    // ─── EC2 Image ───────────────────────────────────────────────────────────
+    // Input format (from fetch_image — raw boto3 DescribeImages):
+    // {
+    //   "ResourceType": "AWS::EC2::Image",
+    //   "Region": "us-east-1",
+    //   "ImageId": "ami-0123456789abcdef0",
+    //   "State": "available",
+    //   "Name": "my-image",
+    //   "Description": "My AMI",
+    //   "Architecture": "x86_64",
+    //   "OwnerId": "123456789012",
+    //   "Public": false,
+    //   "CreationDate": "2024-01-01T00:00:00.000Z"
+    // }
+
+    private int seedRawImage(JsonNode body, String region) {
+        String imageId = body.path("ImageId").asText(null);
+        if (imageId == null) {
+            LOG.warn("seed_raw/ec2: missing ImageId for image");
+            return 0;
+        }
+
+        Image image = new Image();
+        image.setImageId(imageId);
+        image.setName(body.path("Name").asText(null));
+        image.setDescription(body.path("Description").asText(null));
+        image.setState(body.path("State").asText("available"));
+        image.setArchitecture(body.path("Architecture").asText("x86_64"));
+        image.setCreationDate(body.path("CreationDate").asText(null));
+
+        if (body.has("OwnerId") && !body.path("OwnerId").isNull()) {
+            image.setOwnerId(body.path("OwnerId").asText());
+        }
+        if (body.has("Public")) {
+            image.setPublic(body.path("Public").asBoolean(false));
+        } else {
+            image.setPublic(false);
+        }
+        if (body.has("Platform") && !body.path("Platform").isNull()) {
+            image.setPlatform(body.path("Platform").asText(null));
+        }
+        if (body.has("RootDeviceType") && !body.path("RootDeviceType").isNull()) {
+            image.setRootDeviceType(body.path("RootDeviceType").asText("ebs"));
+        }
+        if (body.has("RootDeviceName") && !body.path("RootDeviceName").isNull()) {
+            image.setRootDeviceName(body.path("RootDeviceName").asText("/dev/xvda"));
+        }
+        if (body.has("VirtualizationType") && !body.path("VirtualizationType").isNull()) {
+            image.setVirtualizationType(body.path("VirtualizationType").asText("hvm"));
+        }
+        if (body.has("Hypervisor") && !body.path("Hypervisor").isNull()) {
+            image.setHypervisor(body.path("Hypervisor").asText("xen"));
+        }
+
+        ec2Service.seedImage(region, image);
         return 1;
     }
 }

@@ -7,6 +7,7 @@ import io.github.hectorvent.floci.services.dynamodb.model.AttributeDefinition;
 import io.github.hectorvent.floci.services.dynamodb.model.KeySchemaElement;
 import io.github.hectorvent.floci.services.dynamodb.model.TableDefinition;
 import io.github.hectorvent.floci.services.ec2.Ec2Service;
+import io.github.hectorvent.floci.services.ec2.model.Image;
 import io.github.hectorvent.floci.services.ec2.model.Instance;
 import io.github.hectorvent.floci.services.ec2.model.InstanceState;
 import io.github.hectorvent.floci.services.ec2.model.SecurityGroup;
@@ -211,6 +212,16 @@ public class SeedController {
                 Volume vol = objectMapper.convertValue(node, Volume.class);
                 if (vol.getVolumeId() == null) continue;
                 ec2Service.seedVolume(region, vol);
+                count++;
+            }
+        }
+
+        JsonNode images = body.path("images");
+        if (images.isArray()) {
+            for (JsonNode node : images) {
+                Image img = objectMapper.convertValue(node, Image.class);
+                if (img.getImageId() == null) continue;
+                ec2Service.seedImage(region, img);
                 count++;
             }
         }
