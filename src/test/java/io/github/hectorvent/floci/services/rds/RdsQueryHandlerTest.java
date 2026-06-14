@@ -7,6 +7,7 @@ import io.github.hectorvent.floci.services.rds.model.DbClusterParameterGroup;
 import io.github.hectorvent.floci.services.rds.model.DbInstance;
 import io.github.hectorvent.floci.services.rds.model.DbInstanceStatus;
 import io.github.hectorvent.floci.services.rds.model.DbParameterGroup;
+import io.github.hectorvent.floci.services.rds.model.DbSnapshot;
 import io.github.hectorvent.floci.services.rds.model.DbSubnetGroup;
 import jakarta.ws.rs.core.MultivaluedHashMap;
 import jakarta.ws.rs.core.MultivaluedMap;
@@ -536,6 +537,73 @@ class RdsQueryHandlerTest {
         assertTrue(((String) response.getEntity()).contains("InvalidDBInstanceState"));
     }
 
+    // ──────────────────────────── DB Snapshots ────────────────────────────
+
+    @Test
+    void createDbSnapshot_requiresSnapshotIdentifier() {
+        MultivaluedMap<String, String> p = params();
+        p.add("DBInstanceIdentifier", "mydb");
+        Response response = handler.handle("CreateDBSnapshot", p);
+
+        assertEquals(400, response.getStatus());
+        assertTrue(((String) response.getEntity()).contains("DBSnapshotIdentifier is required."));
+    }
+
+    @Test
+    void createDbSnapshot_requiresInstanceIdentifier() {
+        MultivaluedMap<String, String> p = params();
+        p.add("DBSnapshotIdentifier", "snap1");
+        Response response = handler.handle("CreateDBSnapshot", p);
+
+        assertEquals(400, response.getStatus());
+        assertTrue(((String) response.getEntity()).contains("DBInstanceIdentifier is required."));
+    }
+
+    @Test
+    void createDbSnapshot_callsServiceAndReturnsXml() {
+        DbSnapshot snapshot = makeSnapshot("snap1", "mydb");
+        when(service.createDbSnapshot("snap1", "mydb")).thenReturn(snapshot);
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBSnapshotIdentifier", "snap1");
+        p.add("DBInstanceIdentifier", "mydb");
+        Response response = handler.handle("CreateDBSnapshot", p);
+
+        assertEquals(200, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<DBSnapshotIdentifier>snap1</DBSnapshotIdentifier>"));
+        assertTrue(body.contains("<DBInstanceIdentifier>mydb</DBInstanceIdentifier>"));
+        assertTrue(body.contains("<Status>available</Status>"));
+        verify(service).createDbSnapshot("snap1", "mydb");
+    }
+
+    @Test
+    void describeDbSnapshots_callsServiceWithFilters() {
+        DbSnapshot snapshot = makeSnapshot("snap1", "mydb");
+        when(service.listDbSnapshots("snap1", null)).thenReturn(List.of(snapshot));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBSnapshotIdentifier", "snap1");
+        Response response = handler.handle("DescribeDBSnapshots", p);
+
+        assertEquals(200, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<DBSnapshot>"));
+        assertTrue(body.contains("<DBSnapshotIdentifier>snap1</DBSnapshotIdentifier>"));
+        verify(service).listDbSnapshots("snap1", null);
+    }
+
+    @Test
+    void addTagsToResource_returnsSuccessWithoutError() {
+        MultivaluedMap<String, String> p = params();
+        p.add("ResourceName", "arn:aws:rds:us-east-1:123456789012:db:mydb");
+        p.add("Tags.member.1.Key", "env");
+        p.add("Tags.member.1.Value", "prod");
+        Response response = handler.handle("AddTagsToResource", p);
+
+        assertEquals(200, response.getStatus());
+    }
+
     // ──────────────────────────── DBSubnetGroup shape ───────────────────────────
 
     @Test
@@ -579,5 +647,21 @@ class RdsQueryHandlerTest {
         c.setEngineVersion("15");
         c.setMasterUsername("admin");
         return c;
+    }
+
+    private static DbSnapshot makeSnapshot(String snapshotId, String instanceId) {
+        DbSnapshot s = new DbSnapshot();
+        s.setDbSnapshotIdentifier(snapshotId);
+        s.setDbInstanceIdentifier(instanceId);
+        s.setEngine("postgres");
+        s.setEngineVersion("15");
+        s.setSnapshotType("manual");
+        s.setStatus("available");
+        s.setAllocatedStorage(20);
+        s.setMasterUsername("admin");
+        s.setPort(5432);
+        s.setDbSnapshotArn("arn:aws:rds:us-east-1:123456789012:snapshot:" + snapshotId);
+        s.setSnapshotCreateTime(java.time.Instant.now());
+        return s;
     }
 }

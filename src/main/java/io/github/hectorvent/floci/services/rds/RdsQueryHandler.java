@@ -11,6 +11,7 @@ import io.github.hectorvent.floci.services.rds.model.DbEndpoint;
 import io.github.hectorvent.floci.services.rds.model.DbInstance;
 import io.github.hectorvent.floci.services.rds.model.DbInstanceStatus;
 import io.github.hectorvent.floci.services.rds.model.DbParameterGroup;
+import io.github.hectorvent.floci.services.rds.model.DbSnapshot;
 import io.github.hectorvent.floci.services.rds.model.DbSubnetGroup;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -74,6 +75,9 @@ public class RdsQueryHandler {
                 case "RemoveTagsFromResource" -> handleRemoveTagsFromResource(params);
                 case "StopDBInstance" -> handleStopDbInstance(params);
                 case "StartDBInstance" -> handleStartDbInstance(params);
+                case "CreateDBSnapshot" -> handleCreateDbSnapshot(params);
+                case "DescribeDBSnapshots" -> handleDescribeDbSnapshots(params);
+                case "DeleteDBSnapshot" -> handleDeleteDbSnapshot(params);
                 default -> AwsQueryResponse.error("UnsupportedOperation",
                         "Operation " + action + " is not supported.", AwsNamespaces.RDS, 400);
             };
@@ -335,6 +339,57 @@ public class RdsQueryHandler {
             DbInstance instance = service.startDbInstance(id);
             String result = dbInstanceXml(instance);
             return Response.ok(AwsQueryResponse.envelope("StartDBInstance", AwsNamespaces.RDS, result)).build();
+        } catch (AwsException e) {
+            return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.RDS, e.getHttpStatus());
+        }
+    }
+
+    // ── DB Snapshots ─────────────────────────────────────────────────────────
+
+    private Response handleCreateDbSnapshot(MultivaluedMap<String, String> params) {
+        String snapshotId = params.getFirst("DBSnapshotIdentifier");
+        String instanceId = params.getFirst("DBInstanceIdentifier");
+        if (snapshotId == null || snapshotId.isBlank()) {
+            return AwsQueryResponse.error("InvalidParameterValue", "DBSnapshotIdentifier is required.", AwsNamespaces.RDS, 400);
+        }
+        if (instanceId == null || instanceId.isBlank()) {
+            return AwsQueryResponse.error("InvalidParameterValue", "DBInstanceIdentifier is required.", AwsNamespaces.RDS, 400);
+        }
+        try {
+            DbSnapshot snapshot = service.createDbSnapshot(snapshotId, instanceId);
+            String result = dbSnapshotXml(snapshot);
+            return Response.ok(AwsQueryResponse.envelope("CreateDBSnapshot", AwsNamespaces.RDS, result)).build();
+        } catch (AwsException e) {
+            return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.RDS, e.getHttpStatus());
+        }
+    }
+
+    private Response handleDescribeDbSnapshots(MultivaluedMap<String, String> params) {
+        String filterSnapshotId = params.getFirst("DBSnapshotIdentifier");
+        String filterInstanceId = params.getFirst("DBInstanceIdentifier");
+        try {
+            Collection<DbSnapshot> result = service.listDbSnapshots(filterSnapshotId, filterInstanceId);
+            XmlBuilder xml = new XmlBuilder().start("DBSnapshots");
+            for (DbSnapshot s : result) {
+                xml.start("DBSnapshot").raw(dbSnapshotInnerXml(s)).end("DBSnapshot");
+            }
+            xml.end("DBSnapshots").start("Marker").end("Marker");
+            return Response.ok(AwsQueryResponse.envelope("DescribeDBSnapshots", AwsNamespaces.RDS, xml.build())).build();
+        } catch (AwsException e) {
+            return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.RDS, e.getHttpStatus());
+        }
+    }
+
+    private Response handleDeleteDbSnapshot(MultivaluedMap<String, String> params) {
+        String snapshotId = params.getFirst("DBSnapshotIdentifier");
+        if (snapshotId == null || snapshotId.isBlank()) {
+            return AwsQueryResponse.error("InvalidParameterValue", "DBSnapshotIdentifier is required.", AwsNamespaces.RDS, 400);
+        }
+        try {
+            DbSnapshot snapshot = service.getDbSnapshot(snapshotId);
+            service.deleteDbSnapshot(snapshotId);
+            String result = dbSnapshotXml(snapshot);
+            return Response.ok(AwsQueryResponse.envelope("DeleteDBSnapshot", AwsNamespaces.RDS, result)).build();
         } catch (AwsException e) {
             return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.RDS, e.getHttpStatus());
         }
@@ -793,6 +848,31 @@ public class RdsQueryHandler {
                 .elem("DBParameterGroupFamily", g.getDbParameterGroupFamily())
                 .elem("Description", g.getDescription())
                 .build();
+    }
+
+    private String dbSnapshotXml(DbSnapshot s) {
+        return new XmlBuilder().start("DBSnapshot").raw(dbSnapshotInnerXml(s)).end("DBSnapshot").build();
+    }
+
+    private String dbSnapshotInnerXml(DbSnapshot s) {
+        XmlBuilder xml = new XmlBuilder()
+                .elem("DBSnapshotIdentifier", s.getDbSnapshotIdentifier())
+                .elem("DBInstanceIdentifier", s.getDbInstanceIdentifier())
+                .elem("Engine", s.getEngine())
+                .elem("EngineVersion", s.getEngineVersion())
+                .elem("SnapshotType", s.getSnapshotType())
+                .elem("Status", s.getStatus())
+                .elem("AllocatedStorage", s.getAllocatedStorage())
+                .elem("MasterUsername", s.getMasterUsername())
+                .elem("Port", s.getPort())
+                .elem("DBSnapshotArn", s.getDbSnapshotArn())
+                .elem("AvailabilityZone", config.defaultAvailabilityZone())
+                .elem("StorageType", "gp2")
+                .elem("Encrypted", false);
+        if (s.getSnapshotCreateTime() != null) {
+            xml.elem("SnapshotCreateTime", s.getSnapshotCreateTime().toString());
+        }
+        return xml.build();
     }
 
     private String statusLabel(DbInstanceStatus status) {

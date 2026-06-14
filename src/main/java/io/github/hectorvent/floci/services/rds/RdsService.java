@@ -20,6 +20,7 @@ import io.github.hectorvent.floci.services.rds.model.DbEndpoint;
 import io.github.hectorvent.floci.services.rds.model.DbInstance;
 import io.github.hectorvent.floci.services.rds.model.DbInstanceStatus;
 import io.github.hectorvent.floci.services.rds.model.DbParameterGroup;
+import io.github.hectorvent.floci.services.rds.model.DbSnapshot;
 import io.github.hectorvent.floci.services.rds.model.DbSubnetGroup;
 import io.github.hectorvent.floci.services.rds.proxy.RdsProxyManager;
 import io.github.hectorvent.floci.services.secretsmanager.SecretsManagerService;
@@ -54,6 +55,7 @@ public class RdsService {
     private final StorageBackend<String, DbParameterGroup> parameterGroups;
     private final StorageBackend<String, DbClusterParameterGroup> clusterParameterGroups;
     private final StorageBackend<String, DbSubnetGroup> subnetGroups;
+    private final StorageBackend<String, DbSnapshot> snapshots;
     private final RdsContainerManager containerManager;
     private final RdsProxyManager proxyManager;
     private final RegionResolver regionResolver;
@@ -88,19 +90,8 @@ public class RdsService {
                 new TypeReference<Map<String, DbClusterParameterGroup>>() {});
         this.subnetGroups = storageFactory.create("rds", "rds-subnet-groups.json",
                 new TypeReference<Map<String, DbSubnetGroup>>() {});
-    }
-
-    RdsService(RdsContainerManager containerManager,
-               RdsProxyManager proxyManager,
-               RegionResolver regionResolver,
-               EmulatorConfig config,
-               StorageBackend<String, DbInstance> instances,
-               StorageBackend<String, DbCluster> clusters,
-               StorageBackend<String, DbParameterGroup> parameterGroups,
-               StorageBackend<String, DbClusterParameterGroup> clusterParameterGroups,
-               StorageBackend<String, DbSubnetGroup> subnetGroups) {
-        this(containerManager, proxyManager, regionResolver, config,
-                instances, clusters, parameterGroups, clusterParameterGroups, subnetGroups, null, null);
+        this.snapshots = storageFactory.create("rds", "rds-snapshots.json",
+                new TypeReference<Map<String, DbSnapshot>>() {});
     }
 
     RdsService(RdsContainerManager containerManager,
@@ -112,10 +103,26 @@ public class RdsService {
                StorageBackend<String, DbParameterGroup> parameterGroups,
                StorageBackend<String, DbClusterParameterGroup> clusterParameterGroups,
                StorageBackend<String, DbSubnetGroup> subnetGroups,
+               StorageBackend<String, DbSnapshot> snapshots) {
+        this(containerManager, proxyManager, regionResolver, config,
+                instances, clusters, parameterGroups, clusterParameterGroups, subnetGroups,
+                snapshots, null, null);
+    }
+
+    RdsService(RdsContainerManager containerManager,
+               RdsProxyManager proxyManager,
+               RegionResolver regionResolver,
+               EmulatorConfig config,
+               StorageBackend<String, DbInstance> instances,
+               StorageBackend<String, DbCluster> clusters,
+               StorageBackend<String, DbParameterGroup> parameterGroups,
+               StorageBackend<String, DbClusterParameterGroup> clusterParameterGroups,
+               StorageBackend<String, DbSubnetGroup> subnetGroups,
+               StorageBackend<String, DbSnapshot> snapshots,
                SecretsManagerService secretsManagerService) {
         this(containerManager, proxyManager, regionResolver, config,
                 instances, clusters, parameterGroups, clusterParameterGroups, subnetGroups,
-                secretsManagerService, null);
+                snapshots, secretsManagerService, null);
     }
 
     RdsService(RdsContainerManager containerManager,
@@ -127,6 +134,7 @@ public class RdsService {
                StorageBackend<String, DbParameterGroup> parameterGroups,
                StorageBackend<String, DbClusterParameterGroup> clusterParameterGroups,
                StorageBackend<String, DbSubnetGroup> subnetGroups,
+               StorageBackend<String, DbSnapshot> snapshots,
                SecretsManagerService secretsManagerService,
                DockerHostResolver dockerHostResolver) {
         this.containerManager = containerManager;
@@ -140,6 +148,7 @@ public class RdsService {
         this.parameterGroups = parameterGroups;
         this.clusterParameterGroups = clusterParameterGroups;
         this.subnetGroups = subnetGroups;
+        this.snapshots = snapshots;
     }
 
     public void restorePersistedRuntime() {
@@ -533,6 +542,73 @@ public class RdsService {
         releaseProxyPort(instance.getProxyPort());
         instances.delete(id);
         LOG.infov("DB instance {0} deleted", id);
+    }
+
+    // ── DB Snapshots ─────────────────────────────────────────────────────────
+
+    public DbSnapshot createDbSnapshot(String snapshotId, String dbInstanceId) {
+        if (snapshots.get(snapshotId).isPresent()) {
+            throw new AwsException("DBSnapshotAlreadyExists",
+                    "DB snapshot " + snapshotId + " already exists.", 400);
+        }
+
+        DbInstance instance = getDbInstance(dbInstanceId);
+
+        String engine = instance.getEngine() != null ? instance.getEngine().name().toLowerCase() : "postgres";
+        String engineVersion = instance.getEngineVersion();
+        int port = instance.getEndpoint() != null ? instance.getEndpoint().port() : 5432;
+
+        String region = regionResolver.getDefaultRegion();
+        String snapshotArn = regionResolver.buildArn("rds", region, "snapshot:" + snapshotId);
+
+        DbSnapshot snapshot = new DbSnapshot(snapshotId, dbInstanceId, engine, engineVersion,
+                "manual", "available", instance.getAllocatedStorage(),
+                instance.getMasterUsername(), port, snapshotArn, Instant.now());
+
+        snapshots.put(snapshotId, snapshot);
+        LOG.infov("DB snapshot {0} created for instance {1}", snapshotId, dbInstanceId);
+        return snapshot;
+    }
+
+    public DbSnapshot getDbSnapshot(String snapshotId) {
+        return snapshots.get(snapshotId).orElseThrow(() ->
+                new AwsException("DBSnapshotNotFound",
+                        "DB snapshot " + snapshotId + " not found.", 404));
+    }
+
+    public Collection<DbSnapshot> listDbSnapshots(String filterSnapshotId, String filterInstanceId) {
+        if (filterSnapshotId != null && !filterSnapshotId.isBlank()) {
+            return snapshots.get(filterSnapshotId).map(List::of).orElse(List.of());
+        }
+        if (filterInstanceId != null && !filterInstanceId.isBlank()) {
+            return snapshots.scan(k -> true).stream()
+                    .filter(s -> filterInstanceId.equals(s.getDbInstanceIdentifier()))
+                    .toList();
+        }
+        return snapshots.scan(k -> true);
+    }
+
+    public void deleteDbSnapshot(String snapshotId) {
+        if (snapshots.get(snapshotId).isEmpty()) {
+            throw new AwsException("DBSnapshotNotFound",
+                    "DB snapshot " + snapshotId + " not found.", 404);
+        }
+        snapshots.delete(snapshotId);
+        LOG.infov("DB snapshot {0} deleted", snapshotId);
+    }
+
+    /**
+     * Seed a DB snapshot directly into storage.
+     * Used by the admin seed endpoint for lazy-fetch proxies.
+     */
+    public void seedDbSnapshot(String snapshotId, String dbInstanceId, String engine,
+                               String engineVersion, String status, int allocatedStorage,
+                               String masterUsername) {
+        String region = regionResolver.getDefaultRegion();
+        String snapshotArn = regionResolver.buildArn("rds", region, "snapshot:" + snapshotId);
+        DbSnapshot snapshot = new DbSnapshot(snapshotId, dbInstanceId, engine, engineVersion,
+                "manual", status, allocatedStorage, masterUsername, 5432, snapshotArn, Instant.now());
+        snapshots.put(snapshotId, snapshot);
     }
 
     // ── DB Clusters ───────────────────────────────────────────────────────────

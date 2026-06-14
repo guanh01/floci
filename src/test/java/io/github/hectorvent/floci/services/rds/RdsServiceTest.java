@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.services.rds.model.DatabaseEngine;
 import io.github.hectorvent.floci.services.rds.model.DbCluster;
 import io.github.hectorvent.floci.services.rds.model.DbClusterParameterGroup;
+import io.github.hectorvent.floci.services.rds.model.DbSnapshot;
 import io.github.hectorvent.floci.services.rds.container.RdsContainerHandle;
 import io.github.hectorvent.floci.services.rds.container.RdsContainerManager;
 import io.github.hectorvent.floci.services.rds.model.DbInstance;
@@ -60,7 +61,8 @@ class RdsServiceTest {
 
         rdsService = newService(containerManager, proxyManager,
                 new InMemoryStorage<>(), new InMemoryStorage<>(),
-                new InMemoryStorage<>(), new InMemoryStorage<>());
+                new InMemoryStorage<>(), new InMemoryStorage<>(),
+                new InMemoryStorage<>());
 
         when(containerManager.start(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new RdsContainerHandle("cont-id", "id", "localhost", 5432));
@@ -125,7 +127,7 @@ class RdsServiceTest {
         when(dockerHostResolver.resolve()).thenReturn("floci.local");
         RdsService service = new RdsService(containerManager, proxyManager, regionResolver, config,
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
-                new InMemoryStorage<>(), new InMemoryStorage<>(), null, dockerHostResolver);
+                new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(), null, dockerHostResolver);
 
         DbInstance instance = service.createDbInstance("mydb", "postgres", "13",
                 "admin", "password", "dbname", "db.t3.micro",
@@ -349,6 +351,95 @@ class RdsServiceTest {
     }
 
     @Test
+    void createDbSnapshotCreatesSnapshotForExistingInstance() {
+        rdsService.createDbInstance("mydb", "postgres", "13",
+                "admin", "password", "dbname", "db.t3.micro",
+                20, false, null, null);
+
+        DbSnapshot snapshot = rdsService.createDbSnapshot("mydb-snap", "mydb");
+
+        assertEquals("mydb-snap", snapshot.getDbSnapshotIdentifier());
+        assertEquals("mydb", snapshot.getDbInstanceIdentifier());
+        assertEquals("postgres", snapshot.getEngine());
+        assertEquals("13", snapshot.getEngineVersion());
+        assertEquals("manual", snapshot.getSnapshotType());
+        assertEquals("available", snapshot.getStatus());
+        assertEquals(20, snapshot.getAllocatedStorage());
+        assertEquals("admin", snapshot.getMasterUsername());
+        assertNotNull(snapshot.getDbSnapshotArn());
+        assertTrue(snapshot.getDbSnapshotArn().contains("snapshot:mydb-snap"));
+    }
+
+    @Test
+    void createDbSnapshotRejectsDuplicate() {
+        rdsService.createDbInstance("mydb", "postgres", "13",
+                "admin", "password", "dbname", "db.t3.micro",
+                20, false, null, null);
+        rdsService.createDbSnapshot("mydb-snap", "mydb");
+
+        AwsException exception = assertThrows(AwsException.class,
+                () -> rdsService.createDbSnapshot("mydb-snap", "mydb"));
+
+        assertEquals("DBSnapshotAlreadyExists", exception.getErrorCode());
+    }
+
+    @Test
+    void createDbSnapshotFailsForNonexistentInstance() {
+        AwsException exception = assertThrows(AwsException.class,
+                () -> rdsService.createDbSnapshot("snap1", "nonexistent"));
+
+        assertEquals("DBInstanceNotFound", exception.getErrorCode());
+    }
+
+    @Test
+    void listDbSnapshotsFiltersBySnapshotId() {
+        rdsService.createDbInstance("mydb", "postgres", "13",
+                "admin", "password", "dbname", "db.t3.micro",
+                20, false, null, null);
+        rdsService.createDbSnapshot("snap1", "mydb");
+        rdsService.createDbSnapshot("snap2", "mydb");
+
+        Collection<DbSnapshot> result = rdsService.listDbSnapshots("snap1", null);
+        assertEquals(1, result.size());
+        assertEquals("snap1", result.iterator().next().getDbSnapshotIdentifier());
+    }
+
+    @Test
+    void listDbSnapshotsFiltersByInstanceId() {
+        rdsService.createDbInstance("mydb", "postgres", "13",
+                "admin", "password", "dbname", "db.t3.micro",
+                20, false, null, null);
+        rdsService.createDbSnapshot("snap1", "mydb");
+
+        Collection<DbSnapshot> result = rdsService.listDbSnapshots(null, "mydb");
+        assertEquals(1, result.size());
+
+        result = rdsService.listDbSnapshots(null, "otherdb");
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void deleteDbSnapshotRemovesSnapshot() {
+        rdsService.createDbInstance("mydb", "postgres", "13",
+                "admin", "password", "dbname", "db.t3.micro",
+                20, false, null, null);
+        rdsService.createDbSnapshot("snap1", "mydb");
+
+        rdsService.deleteDbSnapshot("snap1");
+
+        Collection<DbSnapshot> result = rdsService.listDbSnapshots("snap1", null);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void deleteDbSnapshotThrowsWhenNotFound() {
+        AwsException exception = assertThrows(AwsException.class,
+                () -> rdsService.deleteDbSnapshot("nonexistent"));
+
+        assertEquals("DBSnapshotNotFound", exception.getErrorCode());
+    }
+
+    @Test
     void restorePersistedRuntimeRestartsStandaloneInstanceWithSameVolumeAndProxyPort() {
         StorageBackend<String, DbInstance> instances = new InMemoryStorage<>();
         StorageBackend<String, DbCluster> clusters = new InMemoryStorage<>();
@@ -446,7 +537,7 @@ class RdsServiceTest {
                                   StorageBackend<String, DbCluster> clusters,
                                   StorageBackend<String, DbParameterGroup> parameterGroups,
                                   StorageBackend<String, DbClusterParameterGroup> clusterParameterGroups) {
-        return newService(containerManager, proxyManager, instances, clusters, parameterGroups, clusterParameterGroups, null);
+        return newService(containerManager, proxyManager, instances, clusters, parameterGroups, clusterParameterGroups, (SecretsManagerService) null);
     }
 
     private RdsService newService(RdsContainerManager containerManager,
@@ -457,6 +548,17 @@ class RdsServiceTest {
                                   StorageBackend<String, DbClusterParameterGroup> clusterParameterGroups,
                                   SecretsManagerService secretsManager) {
         return new RdsService(containerManager, proxyManager, regionResolver, config,
-                instances, clusters, parameterGroups, clusterParameterGroups, new InMemoryStorage<>(), secretsManager);
+                instances, clusters, parameterGroups, clusterParameterGroups, new InMemoryStorage<>(), new InMemoryStorage<>(), secretsManager);
+    }
+
+    private RdsService newService(RdsContainerManager containerManager,
+                                  RdsProxyManager proxyManager,
+                                  StorageBackend<String, DbInstance> instances,
+                                  StorageBackend<String, DbCluster> clusters,
+                                  StorageBackend<String, DbParameterGroup> parameterGroups,
+                                  StorageBackend<String, DbClusterParameterGroup> clusterParameterGroups,
+                                  StorageBackend<String, DbSnapshot> snapshots) {
+        return new RdsService(containerManager, proxyManager, regionResolver, config,
+                instances, clusters, parameterGroups, clusterParameterGroups, new InMemoryStorage<>(), snapshots);
     }
 }

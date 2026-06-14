@@ -303,6 +303,27 @@ public class SeedController {
             }
         }
 
+        JsonNode dbSnapshots = body.path("dbSnapshots");
+        if (dbSnapshots.isMissingNode()) dbSnapshots = body.path("db_snapshots");
+        if (dbSnapshots.isArray()) {
+            for (JsonNode node : dbSnapshots) {
+                String snapshotId = firstNonNull(node, "dbSnapshotIdentifier", "db_snapshot_identifier");
+                if (snapshotId == null) continue;
+                String instanceId = firstNonNull(node, "dbInstanceIdentifier", "db_instance_identifier", "");
+                String engine = node.path("engine").asText("mysql");
+                String engineVersion = firstNonNull(node, "engineVersion", "engine_version", "8.0.35");
+                String status = node.path("status").asText("available");
+                int allocatedStorage = node.has("allocatedStorage")
+                        ? node.path("allocatedStorage").asInt(20)
+                        : node.path("allocated_storage").asInt(20);
+                String masterUser = firstNonNull(node, "masterUsername", "master_username", "admin");
+
+                rdsService.seedDbSnapshot(snapshotId, instanceId, engine, engineVersion,
+                        status, allocatedStorage, masterUser);
+                count++;
+            }
+        }
+
         return count;
     }
 
