@@ -55,6 +55,7 @@ import io.github.hectorvent.floci.services.ec2.model.RouteTable;
 import io.github.hectorvent.floci.services.ec2.model.RouteTableAssociation;
 import io.github.hectorvent.floci.services.ec2.model.SecurityGroup;
 import io.github.hectorvent.floci.services.ec2.model.SecurityGroupRule;
+import io.github.hectorvent.floci.services.ec2.model.Snapshot;
 import io.github.hectorvent.floci.services.ec2.model.Subnet;
 import io.github.hectorvent.floci.services.ec2.model.Tag;
 import io.github.hectorvent.floci.services.ec2.model.Volume;
@@ -2350,5 +2351,146 @@ public class Ec2Service {
                 .map(Map.Entry::getValue)
                 .filter(fl -> flowLogIds.isEmpty() || flowLogIds.contains(fl.getFlowLogId()))
                 .collect(Collectors.toList());
+    }
+
+    // ─── CreateImage ──────────────────────────────────────────────────────────
+
+    private final Map<String, Image> images = new ConcurrentHashMap<>();
+
+    public Image createImage(String region, String instanceId, String name, String description, boolean noReboot) {
+        ensureDefaultResources(region);
+        Instance inst = getRequiredInstance(region, instanceId);
+
+        String imageId = "ami-" + randomHex(17);
+        Image image = new Image();
+        image.setImageId(imageId);
+        image.setName(name != null ? name : "image-" + instanceId);
+        image.setDescription(description);
+        image.setState("available");
+        image.setOwnerId(accountId);
+        image.setPublic(false);
+        image.setArchitecture(inst.getArchitecture());
+        image.setCreationDate(ISO_FMT.format(Instant.now()));
+        images.put(key(region, imageId), image);
+        return image;
+    }
+
+    public List<Image> describeImagesExtended(String region, List<String> imageIds, List<String> owners) {
+        // Combine static built-in images with dynamically created ones
+        List<Image> result = new ArrayList<>(describeImages(region, imageIds, owners));
+        images.values().stream()
+                .filter(img -> imageIds.isEmpty() || imageIds.contains(img.getImageId()))
+                .filter(img -> owners.isEmpty() || owners.contains(img.getOwnerId()) || owners.contains("self"))
+                .forEach(result::add);
+        return result;
+    }
+
+    // ─── Snapshots ────────────────────────────────────────────────────────────
+
+    private final Map<String, Snapshot> snapshots = new ConcurrentHashMap<>();
+
+    public Snapshot createSnapshot(String region, String volumeId, String description, List<Tag> snapshotTags) {
+        ensureDefaultResources(region);
+        // Validate volume exists
+        Volume vol = volumes.get(key(region, volumeId));
+        if (vol == null) {
+            throw new AwsException("InvalidVolume.NotFound",
+                    "The volume '" + volumeId + "' does not exist.", 400);
+        }
+
+        String snapshotId = "snap-" + randomHex(17);
+        Snapshot snap = new Snapshot();
+        snap.setSnapshotId(snapshotId);
+        snap.setVolumeId(volumeId);
+        snap.setVolumeSize(vol.getSize());
+        snap.setDescription(description);
+        snap.setState("completed");
+        snap.setOwnerId(accountId);
+        snap.setEncrypted(vol.isEncrypted());
+        snap.setStartTime(Instant.now());
+        snap.setRegion(region);
+        if (snapshotTags != null) snap.setTags(new ArrayList<>(snapshotTags));
+        snapshots.put(key(region, snapshotId), snap);
+        return snap;
+    }
+
+    public List<Snapshot> describeSnapshots(String region, List<String> snapshotIds, List<String> ownerIds) {
+        return snapshots.values().stream()
+                .filter(s -> s.getRegion().equals(region))
+                .filter(s -> snapshotIds.isEmpty() || snapshotIds.contains(s.getSnapshotId()))
+                .filter(s -> ownerIds.isEmpty() || ownerIds.contains(s.getOwnerId()) || ownerIds.contains("self"))
+                .collect(Collectors.toList());
+    }
+
+    public void deleteSnapshot(String region, String snapshotId) {
+        if (snapshots.remove(key(region, snapshotId)) == null) {
+            throw new AwsException("InvalidSnapshot.NotFound",
+                    "The snapshot '" + snapshotId + "' does not exist.", 400);
+        }
+    }
+
+    // ─── EBS Encryption By Default ────────────────────────────────────────────
+
+    private final Map<String, Boolean> ebsEncryptionByDefault = new ConcurrentHashMap<>();
+
+    public boolean getEbsEncryptionByDefault(String region) {
+        return ebsEncryptionByDefault.getOrDefault(region, false);
+    }
+
+    public boolean enableEbsEncryptionByDefault(String region) {
+        ebsEncryptionByDefault.put(region, true);
+        return true;
+    }
+
+    public boolean disableEbsEncryptionByDefault(String region) {
+        ebsEncryptionByDefault.put(region, false);
+        return false;
+    }
+
+    // ─── ModifyInstanceMetadataOptions ────────────────────────────────────────
+
+    public Instance modifyInstanceMetadataOptions(String region, String instanceId,
+                                                   String httpTokens, Integer httpPutResponseHopLimit,
+                                                   String httpEndpoint, String httpProtocolIpv6,
+                                                   String instanceMetadataTags) {
+        ensureDefaultResources(region);
+        Instance inst = getRequiredInstance(region, instanceId);
+
+        if (httpTokens != null) inst.setHttpTokens(httpTokens);
+        if (httpPutResponseHopLimit != null) inst.setHttpPutResponseHopLimit(httpPutResponseHopLimit);
+        if (httpEndpoint != null) inst.setHttpEndpoint(httpEndpoint);
+        if (httpProtocolIpv6 != null) inst.setHttpProtocolIpv6(httpProtocolIpv6);
+        if (instanceMetadataTags != null) inst.setInstanceMetadataTags(instanceMetadataTags);
+        return inst;
+    }
+
+    // ─── MonitorInstances / UnmonitorInstances ────────────────────────────────
+
+    public List<Map<String, String>> monitorInstances(String region, List<String> instanceIds) {
+        ensureDefaultResources(region);
+        List<Map<String, String>> result = new ArrayList<>();
+        for (String id : instanceIds) {
+            Instance inst = getRequiredInstance(region, id);
+            inst.setMonitoring("enabled");
+            Map<String, String> entry = new LinkedHashMap<>();
+            entry.put("instanceId", id);
+            entry.put("state", "enabled");
+            result.add(entry);
+        }
+        return result;
+    }
+
+    public List<Map<String, String>> unmonitorInstances(String region, List<String> instanceIds) {
+        ensureDefaultResources(region);
+        List<Map<String, String>> result = new ArrayList<>();
+        for (String id : instanceIds) {
+            Instance inst = getRequiredInstance(region, id);
+            inst.setMonitoring("disabled");
+            Map<String, String> entry = new LinkedHashMap<>();
+            entry.put("instanceId", id);
+            entry.put("state", "disabled");
+            result.add(entry);
+        }
+        return result;
     }
 }

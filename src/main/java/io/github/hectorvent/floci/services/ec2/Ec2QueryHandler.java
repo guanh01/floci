@@ -94,6 +94,20 @@ public class Ec2QueryHandler {
                 case "ImportKeyPair" -> handleImportKeyPair(params, region);
                 // AMIs
                 case "DescribeImages" -> handleDescribeImages(params, region);
+                case "CreateImage" -> handleCreateImage(params, region);
+                // Snapshots
+                case "CreateSnapshot" -> handleCreateSnapshot(params, region);
+                case "DescribeSnapshots" -> handleDescribeSnapshots(params, region);
+                case "DeleteSnapshot" -> handleDeleteSnapshot(params, region);
+                // EBS Encryption
+                case "EnableEbsEncryptionByDefault" -> handleEnableEbsEncryptionByDefault(params, region);
+                case "DisableEbsEncryptionByDefault" -> handleDisableEbsEncryptionByDefault(params, region);
+                case "GetEbsEncryptionByDefault" -> handleGetEbsEncryptionByDefault(params, region);
+                // Instance Metadata
+                case "ModifyInstanceMetadataOptions" -> handleModifyInstanceMetadataOptions(params, region);
+                // Monitoring
+                case "MonitorInstances" -> handleMonitorInstances(params, region);
+                case "UnmonitorInstances" -> handleUnmonitorInstances(params, region);
                 // Tags
                 case "CreateTags" -> handleCreateTags(params, region);
                 case "DeleteTags" -> handleDeleteTags(params, region);
@@ -1033,6 +1047,190 @@ public class Ec2QueryHandler {
         return xmlResponse(xml.build());
     }
 
+    private Response handleCreateImage(MultivaluedMap<String, String> p, String region) {
+        String instanceId = p.getFirst("InstanceId");
+        String name = p.getFirst("Name");
+        String description = p.getFirst("Description");
+        String noRebootStr = p.getFirst("NoReboot");
+        boolean noReboot = "true".equalsIgnoreCase(noRebootStr);
+        Image image = service.createImage(region, instanceId, name, description, noReboot);
+        XmlBuilder xml = new XmlBuilder()
+                .start("CreateImageResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .elem("imageId", image.getImageId())
+                .end("CreateImageResponse");
+        return xmlResponse(xml.build());
+    }
+
+    // ─── Snapshot handlers ────────────────────────────────────────────────────
+
+    private Response handleCreateSnapshot(MultivaluedMap<String, String> p, String region) {
+        String volumeId = p.getFirst("VolumeId");
+        String description = p.getFirst("Description");
+        List<Tag> snapshotTags = new ArrayList<>();
+        for (int i = 1; ; i++) {
+            String resType = p.getFirst("TagSpecification." + i + ".ResourceType");
+            if (resType == null) break;
+            if ("snapshot".equals(resType)) {
+                for (int j = 1; ; j++) {
+                    String k = p.getFirst("TagSpecification." + i + ".Tag." + j + ".Key");
+                    if (k == null) break;
+                    String v = p.getFirst("TagSpecification." + i + ".Tag." + j + ".Value");
+                    snapshotTags.add(new Tag(k, v));
+                }
+            }
+        }
+        Snapshot snap = service.createSnapshot(region, volumeId, description, snapshotTags);
+        XmlBuilder xml = new XmlBuilder()
+                .start("CreateSnapshotResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .elem("snapshotId", snap.getSnapshotId())
+                .elem("volumeId", snap.getVolumeId())
+                .elem("status", snap.getState())
+                .elem("startTime", ISO_FMT.format(snap.getStartTime()))
+                .elem("progress", snap.getProgress() + "%")
+                .elem("ownerId", snap.getOwnerId())
+                .elem("volumeSize", String.valueOf(snap.getVolumeSize()))
+                .elem("description", snap.getDescription() != null ? snap.getDescription() : "")
+                .elem("encrypted", String.valueOf(snap.isEncrypted()))
+                .raw(tagSetXml(snap.getTags()))
+                .end("CreateSnapshotResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleDescribeSnapshots(MultivaluedMap<String, String> p, String region) {
+        List<String> snapshotIds = getList(p, "SnapshotId");
+        List<String> ownerIds = getList(p, "Owner");
+        List<Snapshot> snaps = service.describeSnapshots(region, snapshotIds, ownerIds);
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeSnapshotsResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("snapshotSet");
+        for (Snapshot snap : snaps) {
+            xml.start("item")
+                    .elem("snapshotId", snap.getSnapshotId())
+                    .elem("volumeId", snap.getVolumeId())
+                    .elem("status", snap.getState())
+                    .elem("startTime", ISO_FMT.format(snap.getStartTime()))
+                    .elem("progress", snap.getProgress() + "%")
+                    .elem("ownerId", snap.getOwnerId())
+                    .elem("volumeSize", String.valueOf(snap.getVolumeSize()))
+                    .elem("description", snap.getDescription() != null ? snap.getDescription() : "")
+                    .elem("encrypted", String.valueOf(snap.isEncrypted()))
+                    .raw(tagSetXml(snap.getTags()))
+                    .end("item");
+        }
+        xml.end("snapshotSet").end("DescribeSnapshotsResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleDeleteSnapshot(MultivaluedMap<String, String> p, String region) {
+        service.deleteSnapshot(region, p.getFirst("SnapshotId"));
+        return booleanResponse("DeleteSnapshot");
+    }
+
+    // ─── EBS Encryption handlers ──────────────────────────────────────────────
+
+    private Response handleEnableEbsEncryptionByDefault(MultivaluedMap<String, String> p, String region) {
+        service.enableEbsEncryptionByDefault(region);
+        XmlBuilder xml = new XmlBuilder()
+                .start("EnableEbsEncryptionByDefaultResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .elem("ebsEncryptionByDefault", "true")
+                .end("EnableEbsEncryptionByDefaultResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleDisableEbsEncryptionByDefault(MultivaluedMap<String, String> p, String region) {
+        service.disableEbsEncryptionByDefault(region);
+        XmlBuilder xml = new XmlBuilder()
+                .start("DisableEbsEncryptionByDefaultResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .elem("ebsEncryptionByDefault", "false")
+                .end("DisableEbsEncryptionByDefaultResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleGetEbsEncryptionByDefault(MultivaluedMap<String, String> p, String region) {
+        boolean enabled = service.getEbsEncryptionByDefault(region);
+        XmlBuilder xml = new XmlBuilder()
+                .start("GetEbsEncryptionByDefaultResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .elem("ebsEncryptionByDefault", String.valueOf(enabled))
+                .end("GetEbsEncryptionByDefaultResponse");
+        return xmlResponse(xml.build());
+    }
+
+    // ─── Instance Metadata handlers ───────────────────────────────────────────
+
+    private Response handleModifyInstanceMetadataOptions(MultivaluedMap<String, String> p, String region) {
+        String instanceId = p.getFirst("InstanceId");
+        String httpTokens = p.getFirst("HttpTokens");
+        String hopLimitStr = p.getFirst("HttpPutResponseHopLimit");
+        Integer httpPutResponseHopLimit = hopLimitStr != null ? Integer.parseInt(hopLimitStr) : null;
+        String httpEndpoint = p.getFirst("HttpEndpoint");
+        String httpProtocolIpv6 = p.getFirst("HttpProtocolIpv6");
+        String instanceMetadataTags = p.getFirst("InstanceMetadataTags");
+
+        Instance inst = service.modifyInstanceMetadataOptions(region, instanceId,
+                httpTokens, httpPutResponseHopLimit, httpEndpoint, httpProtocolIpv6, instanceMetadataTags);
+
+        XmlBuilder xml = new XmlBuilder()
+                .start("ModifyInstanceMetadataOptionsResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .elem("instanceId", instanceId)
+                .start("instanceMetadataOptions")
+                .elem("state", "applied")
+                .elem("httpTokens", inst.getHttpTokens())
+                .elem("httpPutResponseHopLimit", String.valueOf(inst.getHttpPutResponseHopLimit()))
+                .elem("httpEndpoint", inst.getHttpEndpoint())
+                .elem("httpProtocolIpv6", inst.getHttpProtocolIpv6())
+                .elem("instanceMetadataTags", inst.getInstanceMetadataTags())
+                .end("instanceMetadataOptions")
+                .end("ModifyInstanceMetadataOptionsResponse");
+        return xmlResponse(xml.build());
+    }
+
+    // ─── Monitoring handlers ──────────────────────────────────────────────────
+
+    private Response handleMonitorInstances(MultivaluedMap<String, String> p, String region) {
+        List<String> ids = getList(p, "InstanceId");
+        List<Map<String, String>> results = service.monitorInstances(region, ids);
+        XmlBuilder xml = new XmlBuilder()
+                .start("MonitorInstancesResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("instancesSet");
+        for (Map<String, String> entry : results) {
+            xml.start("item")
+                    .elem("instanceId", entry.get("instanceId"))
+                    .start("monitoring")
+                    .elem("state", entry.get("state"))
+                    .end("monitoring")
+                    .end("item");
+        }
+        xml.end("instancesSet").end("MonitorInstancesResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleUnmonitorInstances(MultivaluedMap<String, String> p, String region) {
+        List<String> ids = getList(p, "InstanceId");
+        List<Map<String, String>> results = service.unmonitorInstances(region, ids);
+        XmlBuilder xml = new XmlBuilder()
+                .start("UnmonitorInstancesResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("instancesSet");
+        for (Map<String, String> entry : results) {
+            xml.start("item")
+                    .elem("instanceId", entry.get("instanceId"))
+                    .start("monitoring")
+                    .elem("state", entry.get("state"))
+                    .end("monitoring")
+                    .end("item");
+        }
+        xml.end("instancesSet").end("UnmonitorInstancesResponse");
+        return xmlResponse(xml.build());
+    }
+
     // ─── Tag handlers ─────────────────────────────────────────────────────────
 
     private Response handleCreateTags(MultivaluedMap<String, String> p, String region) {
@@ -1685,11 +1883,11 @@ public class Ec2QueryHandler {
                 .end("cpuOptions")
                 .start("metadataOptions")
                 .elem("state", "applied")
-                .elem("httpTokens", "optional")
-                .elem("httpPutResponseHopLimit", "1")
-                .elem("httpEndpoint", "enabled")
-                .elem("httpProtocolIpv6", "disabled")
-                .elem("instanceMetadataTags", "disabled")
+                .elem("httpTokens", inst.getHttpTokens())
+                .elem("httpPutResponseHopLimit", String.valueOf(inst.getHttpPutResponseHopLimit()))
+                .elem("httpEndpoint", inst.getHttpEndpoint())
+                .elem("httpProtocolIpv6", inst.getHttpProtocolIpv6())
+                .elem("instanceMetadataTags", inst.getInstanceMetadataTags())
                 .end("metadataOptions")
                 .start("maintenanceOptions")
                 .elem("autoRecovery", "default")

@@ -50,6 +50,13 @@ public class Instance {
     private boolean disableApiStop = false;
     private boolean disableApiTermination = false;
 
+    // Instance metadata options (IMDSv2 settings)
+    private String httpTokens = "optional";
+    private int httpPutResponseHopLimit = 1;
+    private String httpEndpoint = "enabled";
+    private String httpProtocolIpv6 = "disabled";
+    private String instanceMetadataTags = "disabled";
+
     // Docker backing fields (not serialised to AWS wire format)
     private String dockerContainerId;
     private String containerBridgeIp;
@@ -172,4 +179,19 @@ public class Instance {
 
     public boolean isDisableApiTermination() { return disableApiTermination; }
     public void setDisableApiTermination(boolean disableApiTermination) { this.disableApiTermination = disableApiTermination; }
+
+    public String getHttpTokens() { return httpTokens; }
+    public void setHttpTokens(String httpTokens) { this.httpTokens = httpTokens; }
+
+    public int getHttpPutResponseHopLimit() { return httpPutResponseHopLimit; }
+    public void setHttpPutResponseHopLimit(int httpPutResponseHopLimit) { this.httpPutResponseHopLimit = httpPutResponseHopLimit; }
+
+    public String getHttpEndpoint() { return httpEndpoint; }
+    public void setHttpEndpoint(String httpEndpoint) { this.httpEndpoint = httpEndpoint; }
+
+    public String getHttpProtocolIpv6() { return httpProtocolIpv6; }
+    public void setHttpProtocolIpv6(String httpProtocolIpv6) { this.httpProtocolIpv6 = httpProtocolIpv6; }
+
+    public String getInstanceMetadataTags() { return instanceMetadataTags; }
+    public void setInstanceMetadataTags(String instanceMetadataTags) { this.instanceMetadataTags = instanceMetadataTags; }
 }
