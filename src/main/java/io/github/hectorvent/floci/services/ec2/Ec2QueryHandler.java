@@ -356,12 +356,15 @@ public class Ec2QueryHandler {
                 if (!associationIds.isEmpty() && !associationIds.contains(assocId)) {
                     continue;
                 }
+                String profileId = inst.getIamInstanceProfileId() != null
+                        ? inst.getIamInstanceProfileId()
+                        : iamInstanceProfileId(inst.getInstanceId());
                 xml.start("item")
                         .elem("associationId", assocId)
                         .elem("instanceId", inst.getInstanceId())
                         .start("iamInstanceProfile")
                         .elem("arn", inst.getIamInstanceProfileArn())
-                        .elem("id", iamInstanceProfileId(inst.getInstanceId()))
+                        .elem("id", profileId)
                         .end("iamInstanceProfile")
                         .elem("state", "associated")
                         .end("item");
@@ -1814,8 +1817,12 @@ public class Ec2QueryHandler {
         if (inst.getPlacement() != null) {
             xml.start("placement")
                     .elem("availabilityZone", inst.getPlacement().getAvailabilityZone())
-                    .elem("tenancy", inst.getPlacement().getTenancy())
-                    .end("placement");
+                    .elem("groupName", inst.getPlacement().getGroupName() != null ? inst.getPlacement().getGroupName() : "")
+                    .elem("tenancy", inst.getPlacement().getTenancy());
+            if (inst.getPlacement().getAvailabilityZoneId() != null) {
+                xml.elem("availabilityZoneId", inst.getPlacement().getAvailabilityZoneId());
+            }
+            xml.end("placement");
         }
 
         xml.start("monitoring").elem("state", inst.getMonitoring()).end("monitoring")
@@ -1879,14 +1886,17 @@ public class Ec2QueryHandler {
                     .end("item");
         }
         xml.end("networkInterfaceSet");
-        xml.elem("clientToken", inst.getClientToken())
-                .start("stateReason")
-                .elem("code", "")
-                .elem("message", "")
-                .end("stateReason")
-                .start("cpuOptions")
-                .elem("coreCount", "1")
-                .elem("threadsPerCore", "1")
+        xml.elem("clientToken", inst.getClientToken());
+        // Only emit stateReason for non-running instances (running = code 16)
+        if (inst.getState() != null && inst.getState().getCode() != 16) {
+            xml.start("stateReason")
+                    .elem("code", "")
+                    .elem("message", "")
+                    .end("stateReason");
+        }
+        xml.start("cpuOptions")
+                .elem("coreCount", String.valueOf(inst.getCpuCoreCount()))
+                .elem("threadsPerCore", String.valueOf(inst.getCpuThreadsPerCore()))
                 .end("cpuOptions")
                 .start("metadataOptions")
                 .elem("state", "applied")
@@ -1897,8 +1907,11 @@ public class Ec2QueryHandler {
                 .elem("instanceMetadataTags", inst.getInstanceMetadataTags())
                 .end("metadataOptions")
                 .start("maintenanceOptions")
-                .elem("autoRecovery", "default")
-                .end("maintenanceOptions")
+                .elem("autoRecovery", inst.getMaintenanceAutoRecovery());
+        if (inst.getMaintenanceRebootMigration() != null) {
+            xml.elem("rebootMigration", inst.getMaintenanceRebootMigration());
+        }
+        xml.end("maintenanceOptions")
                 .start("enclaveOptions")
                 .elem("enabled", "false")
                 .end("enclaveOptions")
@@ -1927,9 +1940,12 @@ public class Ec2QueryHandler {
                     .end("blockDeviceMapping");
         }
         if (inst.getIamInstanceProfileArn() != null) {
+            String profileId = inst.getIamInstanceProfileId() != null
+                    ? inst.getIamInstanceProfileId()
+                    : iamInstanceProfileId(inst.getInstanceId());
             xml.start("iamInstanceProfile")
                     .elem("arn", inst.getIamInstanceProfileArn())
-                    .elem("id", iamInstanceProfileId(inst.getInstanceId()))
+                    .elem("id", profileId)
                     .end("iamInstanceProfile");
         }
         xml.raw(tagSetXml(inst.getTags()));

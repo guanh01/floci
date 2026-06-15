@@ -39,8 +39,17 @@ public class Instance {
     private boolean ebsOptimized = false;
     private boolean enaSupport = true;
     private String iamInstanceProfileArn;
+    private String iamInstanceProfileId; // preserved from seed to avoid generated Id drift
     private String region;
     private List<Tag> tags = new ArrayList<>();
+
+    // CpuOptions (seeded from real AWS DescribeInstances)
+    private int cpuCoreCount = 1;
+    private int cpuThreadsPerCore = 1;
+
+    // MaintenanceOptions
+    private String maintenanceAutoRecovery = "default";
+    private String maintenanceRebootMigration;  // null means omit from response
 
     private String rootVolumeId;
 
@@ -194,4 +203,19 @@ public class Instance {
 
     public String getInstanceMetadataTags() { return instanceMetadataTags; }
     public void setInstanceMetadataTags(String instanceMetadataTags) { this.instanceMetadataTags = instanceMetadataTags; }
+
+    public String getIamInstanceProfileId() { return iamInstanceProfileId; }
+    public void setIamInstanceProfileId(String iamInstanceProfileId) { this.iamInstanceProfileId = iamInstanceProfileId; }
+
+    public int getCpuCoreCount() { return cpuCoreCount; }
+    public void setCpuCoreCount(int cpuCoreCount) { this.cpuCoreCount = cpuCoreCount; }
+
+    public int getCpuThreadsPerCore() { return cpuThreadsPerCore; }
+    public void setCpuThreadsPerCore(int cpuThreadsPerCore) { this.cpuThreadsPerCore = cpuThreadsPerCore; }
+
+    public String getMaintenanceAutoRecovery() { return maintenanceAutoRecovery; }
+    public void setMaintenanceAutoRecovery(String maintenanceAutoRecovery) { this.maintenanceAutoRecovery = maintenanceAutoRecovery; }
+
+    public String getMaintenanceRebootMigration() { return maintenanceRebootMigration; }
+    public void setMaintenanceRebootMigration(String maintenanceRebootMigration) { this.maintenanceRebootMigration = maintenanceRebootMigration; }
 }

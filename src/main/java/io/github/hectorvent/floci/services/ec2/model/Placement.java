@@ -8,6 +8,7 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 public class Placement {
 
     private String availabilityZone;
+    private String availabilityZoneId;
     private String tenancy = "default";
     private String groupName;
 
@@ -25,4 +26,7 @@ public class Placement {
 
     public String getGroupName() { return groupName; }
     public void setGroupName(String groupName) { this.groupName = groupName; }
+
+    public String getAvailabilityZoneId() { return availabilityZoneId; }
+    public void setAvailabilityZoneId(String availabilityZoneId) { this.availabilityZoneId = availabilityZoneId; }
 }
