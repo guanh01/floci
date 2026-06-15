@@ -122,9 +122,13 @@ public class CloudFormationQueryHandler {
         Map<String, String> parameters = extractParameters(params);
         List<String> capabilities = extractList(params, "Capabilities.member.");
 
-        ChangeSet cs = cfnService.createChangeSet(stackName, "update-" + UUID.randomUUID().toString().substring(0, 8),
-                "UPDATE", templateBody, templateUrl, parameters, capabilities, Map.of(), region);
-        awaitExecution(cfnService.executeChangeSet(stackName, cs.getChangeSetName(), region));
+        try {
+            ChangeSet cs = cfnService.createChangeSet(stackName, "update-" + UUID.randomUUID().toString().substring(0, 8),
+                    "UPDATE", templateBody, templateUrl, parameters, capabilities, Map.of(), region);
+            awaitExecution(cfnService.executeChangeSet(stackName, cs.getChangeSetName(), region));
+        } catch (AwsException e) {
+            return xmlError(e.getErrorCode(), e.getMessage(), e.getHttpStatus());
+        }
 
         Stack stack = cfnService.describeStacks(stackName, region).get(0);
         String xml = new XmlBuilder()

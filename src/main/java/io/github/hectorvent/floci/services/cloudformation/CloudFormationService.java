@@ -133,6 +133,12 @@ public class CloudFormationService {
                                      Map<String, String> tags, String region) {
         String resolvedTemplate = resolveTemplate(templateBody, templateUrl);
 
+        boolean isUpdate = "UPDATE".equalsIgnoreCase(changeSetType);
+        if (isUpdate && !stacks.containsKey(key(stackName, region))) {
+            throw new AwsException("ValidationError",
+                    "Stack with id " + stackName + " does not exist", 400);
+        }
+
         Stack stack = stacks.computeIfAbsent(key(stackName, region), k -> {
             Stack s = newStack(stackName, region);
             if (tags != null) s.getTags().putAll(tags);
