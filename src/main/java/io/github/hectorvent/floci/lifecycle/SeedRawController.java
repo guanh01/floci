@@ -24,6 +24,9 @@ import io.github.hectorvent.floci.services.ec2.model.UserIdGroupPair;
 import io.github.hectorvent.floci.services.ec2.model.Volume;
 import io.github.hectorvent.floci.services.ec2.model.Tag;
 import io.github.hectorvent.floci.services.ec2.model.VolumeAttachment;
+import io.github.hectorvent.floci.services.iam.IamService;
+import io.github.hectorvent.floci.services.iam.model.IamRole;
+import io.github.hectorvent.floci.services.iam.model.InstanceProfile;
 import io.github.hectorvent.floci.services.kms.KmsService;
 import io.github.hectorvent.floci.services.rds.RdsService;
 import io.github.hectorvent.floci.services.sns.SnsService;
@@ -68,6 +71,7 @@ public class SeedRawController {
     private final SnsService snsService;
     private final KmsService kmsService;
     private final Ec2Service ec2Service;
+    private final IamService iamService;
     private final RdsService rdsService;
     private final SsmService ssmService;
     private final ObjectMapper objectMapper;
@@ -77,6 +81,7 @@ public class SeedRawController {
                              SnsService snsService,
                              KmsService kmsService,
                              Ec2Service ec2Service,
+                             IamService iamService,
                              RdsService rdsService,
                              SsmService ssmService,
                              ObjectMapper objectMapper) {
@@ -84,6 +89,7 @@ public class SeedRawController {
         this.snsService = snsService;
         this.kmsService = kmsService;
         this.ec2Service = ec2Service;
+        this.iamService = iamService;
         this.rdsService = rdsService;
         this.ssmService = ssmService;
         this.objectMapper = objectMapper;
@@ -103,6 +109,7 @@ public class SeedRawController {
                 case "sns" -> seedRawSns(body, resourceType, region);
                 case "kms" -> seedRawKms(body, resourceType, region);
                 case "ec2" -> seedRawEc2(body, resourceType, region);
+                case "iam" -> seedRawIam(body, resourceType, region);
                 case "rds" -> seedRawRds(body, resourceType, region);
                 case "ssm" -> seedRawSsm(body, resourceType, region);
                 default -> {
@@ -911,6 +918,134 @@ public class SeedRawController {
             permissions.add(perm);
         }
         return permissions;
+    }
+
+    // ─── IAM ──────────────────────────────────────────────────────────────────
+    // Input format for roles (from fetch_role):
+    // {
+    //   "ResourceType": "AWS::IAM::Role",
+    //   "Region": "us-east-1",
+    //   "Role": {
+    //     "RoleName": "MyRole",
+    //     "RoleId": "AROAEXAMPLE",
+    //     "Arn": "arn:aws:iam::123456789012:role/MyRole",
+    //     "Path": "/",
+    //     "AssumeRolePolicyDocument": "...",
+    //     "Description": "...",
+    //     "MaxSessionDuration": 3600,
+    //     "CreateDate": "2024-01-01T00:00:00Z",
+    //     "Tags": [{"Key": "k", "Value": "v"}]
+    //   },
+    //   "InstanceProfiles": [{
+    //     "InstanceProfileName": "MyProfile",
+    //     "InstanceProfileId": "AIPAEXAMPLE",
+    //     "Arn": "arn:aws:iam::123456789012:instance-profile/MyProfile",
+    //     "Path": "/",
+    //     "Roles": [{"RoleName": "MyRole"}]
+    //   }]
+    // }
+
+    private int seedRawIam(JsonNode body, String resourceType, String region) {
+        if ("AWS::IAM::Role".equals(resourceType)) {
+            return seedRawRole(body);
+        }
+        LOG.warnv("seed_raw/iam: unsupported ResourceType: {0}", resourceType);
+        return 0;
+    }
+
+    private int seedRawRole(JsonNode body) {
+        JsonNode roleNode = body.path("Role");
+        if (roleNode.isMissingNode() || !roleNode.isObject()) {
+            LOG.warn("seed_raw/iam: missing Role object in payload");
+            return 0;
+        }
+
+        String roleName = roleNode.path("RoleName").asText(null);
+        if (roleName == null || roleName.isEmpty()) {
+            LOG.warn("seed_raw/iam: missing RoleName");
+            return 0;
+        }
+
+        IamRole role = new IamRole();
+        role.setRoleName(roleName);
+        role.setRoleId(roleNode.path("RoleId").asText("AROASEEDRAW00000000001"));
+        role.setArn(roleNode.path("Arn").asText(null));
+        role.setPath(roleNode.path("Path").asText("/"));
+        role.setMaxSessionDuration(roleNode.path("MaxSessionDuration").asInt(3600));
+        role.setDescription(roleNode.path("Description").asText(null));
+
+        // AssumeRolePolicyDocument can be a JSON object or a string
+        JsonNode assumePolicy = roleNode.path("AssumeRolePolicyDocument");
+        if (assumePolicy.isObject()) {
+            role.setAssumeRolePolicyDocument(assumePolicy.toString());
+        } else {
+            role.setAssumeRolePolicyDocument(assumePolicy.asText("{}"));
+        }
+
+        // CreateDate
+        String createDateStr = roleNode.path("CreateDate").asText(null);
+        if (createDateStr != null && !createDateStr.isEmpty()) {
+            try {
+                role.setCreateDate(Instant.parse(createDateStr));
+            } catch (Exception e) {
+                role.setCreateDate(Instant.now());
+            }
+        }
+
+        // Tags: [{"Key": "k", "Value": "v"}]
+        JsonNode tagsNode = roleNode.path("Tags");
+        if (tagsNode.isArray()) {
+            Map<String, String> tags = new HashMap<>();
+            for (JsonNode tagNode : tagsNode) {
+                String key = tagNode.path("Key").asText(null);
+                String value = tagNode.path("Value").asText("");
+                if (key != null) {
+                    tags.put(key, value);
+                }
+            }
+            role.setTags(tags);
+        }
+
+        iamService.seedRole(role);
+
+        // Seed associated instance profiles
+        JsonNode profilesNode = body.path("InstanceProfiles");
+        if (profilesNode.isArray()) {
+            for (JsonNode p : profilesNode) {
+                String ipName = p.path("InstanceProfileName").asText(null);
+                if (ipName == null || ipName.isEmpty()) continue;
+
+                InstanceProfile profile = new InstanceProfile();
+                profile.setInstanceProfileName(ipName);
+                profile.setInstanceProfileId(p.path("InstanceProfileId").asText("AIPASEEDRAW00000000001"));
+                profile.setArn(p.path("Arn").asText(null));
+                profile.setPath(p.path("Path").asText("/"));
+
+                // Extract role names from Roles array
+                JsonNode rolesArr = p.path("Roles");
+                if (rolesArr.isArray()) {
+                    List<String> roleNames = new ArrayList<>();
+                    for (JsonNode r : rolesArr) {
+                        String rn = r.path("RoleName").asText(null);
+                        if (rn != null) roleNames.add(rn);
+                    }
+                    profile.setRoleNames(roleNames);
+                }
+
+                String createStr = p.path("CreateDate").asText(null);
+                if (createStr != null && !createStr.isEmpty()) {
+                    try {
+                        profile.setCreateDate(Instant.parse(createStr));
+                    } catch (Exception e) {
+                        profile.setCreateDate(Instant.now());
+                    }
+                }
+
+                iamService.seedInstanceProfile(profile);
+            }
+        }
+
+        return 1;
     }
 
     // ─── RDS ──────────────────────────────────────────────────────────────────
