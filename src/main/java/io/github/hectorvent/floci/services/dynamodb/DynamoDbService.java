@@ -333,6 +333,18 @@ public class DynamoDbService {
         tableStore.put(regionKey(region, canonicalTableName), table);
     }
 
+    /**
+     * Seed a table directly into the store, bypassing createTable validation.
+     * Used by the admin seed_raw endpoint to inject real AWS state into the emulator.
+     * Also initializes the item map so subsequent operations (DeleteTable, PutItem, etc.) find it.
+     */
+    public void seedTable(String region, TableDefinition table) {
+        String storageKey = regionKey(region, table.getTableName());
+        tableStore.put(storageKey, table);
+        itemsByTable.putIfAbsent(storageKey, new ConcurrentSkipListMap<>());
+        LOG.infov("Seeded table: {0} in region {1}", table.getTableName(), region);
+    }
+
     public void deleteTable(String tableName, String region) {
         String canonicalTableName = canonicalTableName(region, tableName);
         String storageKey = regionKey(region, canonicalTableName);

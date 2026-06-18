@@ -2,6 +2,13 @@ package io.github.hectorvent.floci.lifecycle;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.hectorvent.floci.services.dynamodb.DynamoDbService;
+import io.github.hectorvent.floci.services.dynamodb.model.AttributeDefinition;
+import io.github.hectorvent.floci.services.dynamodb.model.GlobalSecondaryIndex;
+import io.github.hectorvent.floci.services.dynamodb.model.KeySchemaElement;
+import io.github.hectorvent.floci.services.dynamodb.model.LocalSecondaryIndex;
+import io.github.hectorvent.floci.services.dynamodb.model.ProvisionedThroughput;
+import io.github.hectorvent.floci.services.dynamodb.model.TableDefinition;
 import io.github.hectorvent.floci.services.ec2.Ec2Service;
 import io.github.hectorvent.floci.services.ec2.model.GroupIdentifier;
 import io.github.hectorvent.floci.services.ec2.model.Image;
@@ -50,16 +57,19 @@ public class SeedRawController {
 
     private static final Logger LOG = Logger.getLogger(SeedRawController.class);
 
+    private final DynamoDbService dynamoDbService;
     private final SnsService snsService;
     private final KmsService kmsService;
     private final Ec2Service ec2Service;
     private final ObjectMapper objectMapper;
 
     @Inject
-    public SeedRawController(SnsService snsService,
+    public SeedRawController(DynamoDbService dynamoDbService,
+                             SnsService snsService,
                              KmsService kmsService,
                              Ec2Service ec2Service,
                              ObjectMapper objectMapper) {
+        this.dynamoDbService = dynamoDbService;
         this.snsService = snsService;
         this.kmsService = kmsService;
         this.ec2Service = ec2Service;
@@ -76,6 +86,7 @@ public class SeedRawController {
             String region = body.path("Region").asText("us-east-1");
 
             int count = switch (service) {
+                case "dynamodb" -> seedRawDynamodb(body, resourceType, region);
                 case "sns" -> seedRawSns(body, resourceType, region);
                 case "kms" -> seedRawKms(body, resourceType, region);
                 case "ec2" -> seedRawEc2(body, resourceType, region);
@@ -98,6 +109,215 @@ public class SeedRawController {
                     .entity(Map.of("error", e.getMessage() != null ? e.getMessage() : "Internal error"))
                     .build();
         }
+    }
+
+    // ─── DynamoDB ──────────────────────────────────────────────────────────────
+    // Input format (from fetch_table_with_items):
+    // {
+    //   "ResourceType": "AWS::DynamoDB::Table",
+    //   "Region": "us-east-1",
+    //   "Table": {
+    //     "TableName": "HotelReservations",
+    //     "TableStatus": "ACTIVE",
+    //     "KeySchema": [{"AttributeName": "id", "KeyType": "HASH"}],
+    //     "AttributeDefinitions": [{"AttributeName": "id", "AttributeType": "S"}],
+    //     "ProvisionedThroughput": {"ReadCapacityUnits": 5, "WriteCapacityUnits": 5},
+    //     "TableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/HotelReservations",
+    //     "BillingModeSummary": {"BillingMode": "PAY_PER_REQUEST"},
+    //     "GlobalSecondaryIndexes": [...],
+    //     "LocalSecondaryIndexes": [...],
+    //     "SSEDescription": {"Status": "ENABLED", "SSEType": "KMS", "KMSMasterKeyArn": "..."},
+    //     "DeletionProtectionEnabled": false,
+    //     ...
+    //   },
+    //   "Items": [],
+    //   "ItemCount": 12
+    // }
+
+    private int seedRawDynamodb(JsonNode body, String resourceType, String region) {
+        if (!"AWS::DynamoDB::Table".equals(resourceType)) {
+            LOG.warnv("seed_raw/dynamodb: unsupported ResourceType: {0}", resourceType);
+            return 0;
+        }
+
+        JsonNode tableNode = body.path("Table");
+        if (tableNode.isMissingNode() || !tableNode.isObject()) {
+            LOG.warn("seed_raw/dynamodb: missing Table object in payload");
+            return 0;
+        }
+
+        String tableName = tableNode.path("TableName").asText(null);
+        if (tableName == null || tableName.isEmpty()) {
+            LOG.warn("seed_raw/dynamodb: missing TableName in Table object");
+            return 0;
+        }
+
+        // Parse KeySchema
+        List<KeySchemaElement> keySchema = new ArrayList<>();
+        JsonNode ksNode = tableNode.path("KeySchema");
+        if (ksNode.isArray()) {
+            for (JsonNode ks : ksNode) {
+                keySchema.add(new KeySchemaElement(
+                        ks.path("AttributeName").asText(),
+                        ks.path("KeyType").asText()));
+            }
+        }
+
+        // Parse AttributeDefinitions
+        List<AttributeDefinition> attrDefs = new ArrayList<>();
+        JsonNode adNode = tableNode.path("AttributeDefinitions");
+        if (adNode.isArray()) {
+            for (JsonNode ad : adNode) {
+                attrDefs.add(new AttributeDefinition(
+                        ad.path("AttributeName").asText(),
+                        ad.path("AttributeType").asText()));
+            }
+        }
+
+        // Build TableDefinition directly (bypass createTable validation)
+        TableDefinition table = new TableDefinition();
+        table.setTableName(tableName);
+        table.setKeySchema(keySchema);
+        table.setAttributeDefinitions(attrDefs);
+        table.setTableStatus(tableNode.path("TableStatus").asText("ACTIVE"));
+
+        // TableArn — use from payload or let seedTable use default
+        String tableArn = tableNode.path("TableArn").asText(null);
+        if (tableArn != null && !tableArn.isEmpty()) {
+            table.setTableArn(tableArn);
+        }
+
+        // ProvisionedThroughput
+        JsonNode ptNode = tableNode.path("ProvisionedThroughput");
+        if (ptNode.isObject()) {
+            ProvisionedThroughput pt = new ProvisionedThroughput(
+                    ptNode.path("ReadCapacityUnits").asLong(5),
+                    ptNode.path("WriteCapacityUnits").asLong(5));
+            table.setProvisionedThroughput(pt);
+        }
+
+        // BillingMode
+        JsonNode billNode = tableNode.path("BillingModeSummary");
+        if (billNode.isObject()) {
+            table.setBillingMode(billNode.path("BillingMode").asText("PROVISIONED"));
+        }
+
+        // ItemCount
+        long itemCount = body.path("ItemCount").asLong(
+                tableNode.path("ItemCount").asLong(0));
+        table.setItemCount(itemCount);
+
+        // TableSizeBytes
+        table.setTableSizeBytes(tableNode.path("TableSizeBytes").asLong(0));
+
+        // CreationDateTime
+        String creationStr = tableNode.path("CreationDateTime").asText(null);
+        if (creationStr != null && !creationStr.isEmpty()) {
+            try {
+                // boto3 returns epoch seconds as a float
+                double epoch = Double.parseDouble(creationStr);
+                table.setCreationDateTime(Instant.ofEpochSecond((long) epoch));
+            } catch (NumberFormatException e) {
+                try {
+                    table.setCreationDateTime(Instant.parse(creationStr));
+                } catch (Exception e2) {
+                    table.setCreationDateTime(Instant.now());
+                }
+            }
+        }
+
+        // DeletionProtectionEnabled
+        table.setDeletionProtectionEnabled(
+                tableNode.path("DeletionProtectionEnabled").asBoolean(false));
+
+        // SSEDescription
+        JsonNode sseNode = tableNode.path("SSEDescription");
+        if (sseNode.isObject()) {
+            String sseStatus = sseNode.path("Status").asText("");
+            table.setSseEnabled("ENABLED".equalsIgnoreCase(sseStatus)
+                    || "ENABLING".equalsIgnoreCase(sseStatus));
+            table.setSseType(sseNode.path("SSEType").asText(null));
+            table.setKmsMasterKeyArn(sseNode.path("KMSMasterKeyArn").asText(null));
+        }
+
+        // GlobalSecondaryIndexes
+        JsonNode gsiNode = tableNode.path("GlobalSecondaryIndexes");
+        if (gsiNode.isArray()) {
+            List<GlobalSecondaryIndex> gsis = new ArrayList<>();
+            for (JsonNode g : gsiNode) {
+                List<KeySchemaElement> gsiKs = new ArrayList<>();
+                JsonNode gsiKsNode = g.path("KeySchema");
+                if (gsiKsNode.isArray()) {
+                    for (JsonNode k : gsiKsNode) {
+                        gsiKs.add(new KeySchemaElement(
+                                k.path("AttributeName").asText(),
+                                k.path("KeyType").asText()));
+                    }
+                }
+                String projType = g.path("Projection").path("ProjectionType").asText("ALL");
+                List<String> nonKeyAttrs = new ArrayList<>();
+                JsonNode nkaNode = g.path("Projection").path("NonKeyAttributes");
+                if (nkaNode.isArray()) {
+                    for (JsonNode n : nkaNode) {
+                        nonKeyAttrs.add(n.asText());
+                    }
+                }
+                GlobalSecondaryIndex gsi = new GlobalSecondaryIndex(
+                        g.path("IndexName").asText(),
+                        gsiKs,
+                        g.path("IndexArn").asText(null),
+                        projType,
+                        nonKeyAttrs);
+                // Preserve provisioned throughput from seed
+                JsonNode gsiPt = g.path("ProvisionedThroughput");
+                if (gsiPt.isObject()) {
+                    gsi.setProvisionedThroughput(new ProvisionedThroughput(
+                            gsiPt.path("ReadCapacityUnits").asLong(0),
+                            gsiPt.path("WriteCapacityUnits").asLong(0)));
+                }
+                gsis.add(gsi);
+            }
+            table.setGlobalSecondaryIndexes(gsis);
+        }
+
+        // LocalSecondaryIndexes
+        JsonNode lsiNode = tableNode.path("LocalSecondaryIndexes");
+        if (lsiNode.isArray()) {
+            List<LocalSecondaryIndex> lsis = new ArrayList<>();
+            for (JsonNode l : lsiNode) {
+                List<KeySchemaElement> lsiKs = new ArrayList<>();
+                JsonNode lsiKsNode = l.path("KeySchema");
+                if (lsiKsNode.isArray()) {
+                    for (JsonNode k : lsiKsNode) {
+                        lsiKs.add(new KeySchemaElement(
+                                k.path("AttributeName").asText(),
+                                k.path("KeyType").asText()));
+                    }
+                }
+                String projType = l.path("Projection").path("ProjectionType").asText("ALL");
+                LocalSecondaryIndex lsi = new LocalSecondaryIndex();
+                lsi.setIndexName(l.path("IndexName").asText());
+                lsi.setKeySchema(lsiKs);
+                lsi.setProjectionType(projType);
+                lsi.setIndexArn(l.path("IndexArn").asText(null));
+                lsis.add(lsi);
+            }
+            table.setLocalSecondaryIndexes(lsis);
+        }
+
+        // StreamSpecification
+        JsonNode streamNode = tableNode.path("StreamSpecification");
+        if (streamNode.isObject()) {
+            table.setStreamEnabled(streamNode.path("StreamEnabled").asBoolean(false));
+            table.setStreamViewType(streamNode.path("StreamViewType").asText(null));
+        }
+        String streamArn = tableNode.path("LatestStreamArn").asText(null);
+        if (streamArn != null && !streamArn.isEmpty()) {
+            table.setStreamArn(streamArn);
+        }
+
+        dynamoDbService.seedTable(region, table);
+        return 1;
     }
 
     // ─── SNS ──────────────────────────────────────────────────────────────────

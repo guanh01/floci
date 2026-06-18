@@ -2348,4 +2348,50 @@ class DynamoDbServiceTest {
         JsonNode stored = service.getItem("Users", item("userId", "u1"), "us-east-1");
         assertEquals("2", stored.get("counter").get("N").asText());
     }
+
+    // ─── seedTable tests ─────────────────────────────────────────────────────
+
+    @Test
+    void seedTableMakesTableAvailableForDescribeAndDelete() {
+        // Seed a table directly (bypasses createTable validation)
+        TableDefinition def = new TableDefinition();
+        def.setTableName("SeededTable");
+        def.setKeySchema(List.of(new KeySchemaElement("pk", "HASH")));
+        def.setAttributeDefinitions(List.of(new AttributeDefinition("pk", "S")));
+        def.setTableStatus("ACTIVE");
+        def.setTableArn("arn:aws:dynamodb:us-east-1:123456789012:table/SeededTable");
+
+        service.seedTable("us-east-1", def);
+
+        // Should be findable via describeTable
+        TableDefinition found = service.describeTable("SeededTable", "us-east-1");
+        assertEquals("SeededTable", found.getTableName());
+        assertEquals("ACTIVE", found.getTableStatus());
+
+        // Should be findable via listTables
+        assertTrue(service.listTables("us-east-1").contains("SeededTable"));
+
+        // Should support deleteTable without ResourceNotFoundException
+        assertDoesNotThrow(() -> service.deleteTable("SeededTable", "us-east-1"));
+
+        // After deletion, describe should throw
+        assertThrows(AwsException.class, () -> service.describeTable("SeededTable", "us-east-1"));
+    }
+
+    @Test
+    void seedTableAllowsPutAndGetItem() {
+        TableDefinition def = new TableDefinition();
+        def.setTableName("ItemTable");
+        def.setKeySchema(List.of(new KeySchemaElement("id", "HASH")));
+        def.setAttributeDefinitions(List.of(new AttributeDefinition("id", "S")));
+        def.setTableStatus("ACTIVE");
+
+        service.seedTable("us-east-1", def);
+
+        // Put and get an item
+        service.putItem("ItemTable", item("id", "item1"), "us-east-1");
+        JsonNode result = service.getItem("ItemTable", item("id", "item1"), "us-east-1");
+        assertNotNull(result);
+        assertEquals("item1", result.get("id").get("S").asText());
+    }
 }
