@@ -15,7 +15,12 @@ import io.github.hectorvent.floci.services.ec2.model.Image;
 import io.github.hectorvent.floci.services.ec2.model.Instance;
 import io.github.hectorvent.floci.services.ec2.model.InstanceNetworkInterface;
 import io.github.hectorvent.floci.services.ec2.model.InstanceState;
+import io.github.hectorvent.floci.services.ec2.model.IpPermission;
+import io.github.hectorvent.floci.services.ec2.model.IpRange;
+import io.github.hectorvent.floci.services.ec2.model.Ipv6Range;
 import io.github.hectorvent.floci.services.ec2.model.Placement;
+import io.github.hectorvent.floci.services.ec2.model.SecurityGroup;
+import io.github.hectorvent.floci.services.ec2.model.UserIdGroupPair;
 import io.github.hectorvent.floci.services.ec2.model.Volume;
 import io.github.hectorvent.floci.services.ec2.model.Tag;
 import io.github.hectorvent.floci.services.ec2.model.VolumeAttachment;
@@ -448,6 +453,9 @@ public class SeedRawController {
         if ("AWS::EC2::Image".equals(resourceType)) {
             return seedRawImage(body, region);
         }
+        if ("AWS::EC2::SecurityGroup".equals(resourceType)) {
+            return seedRawSecurityGroup(body, region);
+        }
         // For other EC2 resource types, log a warning and return 0
         LOG.warnv("seed_raw/ec2: unsupported ResourceType: {0}", resourceType);
         return 0;
@@ -768,5 +776,130 @@ public class SeedRawController {
 
         ec2Service.seedImage(region, image);
         return 1;
+    }
+
+    // ─── EC2 Security Group ──────────────────────────────────────────────────
+    // Input format (from fetch_security_group — raw boto3 DescribeSecurityGroups):
+    // {
+    //   "ResourceType": "AWS::EC2::SecurityGroup",
+    //   "Region": "us-east-1",
+    //   "GroupId": "sg-0123456789abcdef0",
+    //   "GroupName": "my-sg",
+    //   "Description": "My security group",
+    //   "VpcId": "vpc-xxx",
+    //   "OwnerId": "123456789012",
+    //   "IpPermissions": [{
+    //     "IpProtocol": "tcp",
+    //     "FromPort": 443,
+    //     "ToPort": 443,
+    //     "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "HTTPS"}],
+    //     "Ipv6Ranges": [{"CidrIpv6": "::/0"}],
+    //     "UserIdGroupPairs": [{"GroupId": "sg-other", "UserId": "123"}]
+    //   }],
+    //   "IpPermissionsEgress": [...],
+    //   "Tags": [{"Key": "Name", "Value": "my-sg"}]
+    // }
+
+    private int seedRawSecurityGroup(JsonNode body, String region) {
+        String groupId = body.path("GroupId").asText(null);
+        if (groupId == null) {
+            LOG.warn("seed_raw/ec2: missing GroupId for security group");
+            return 0;
+        }
+
+        SecurityGroup sg = new SecurityGroup();
+        sg.setGroupId(groupId);
+        sg.setGroupName(body.path("GroupName").asText(""));
+        sg.setDescription(body.path("Description").asText(""));
+        sg.setVpcId(body.path("VpcId").asText(null));
+        sg.setOwnerId(body.path("OwnerId").asText(null));
+        sg.setRegion(region);
+
+        // Parse IpPermissions (ingress rules)
+        JsonNode ingressNode = body.path("IpPermissions");
+        if (ingressNode.isArray()) {
+            sg.setIpPermissions(parseIpPermissions(ingressNode));
+        }
+
+        // Parse IpPermissionsEgress (egress rules)
+        JsonNode egressNode = body.path("IpPermissionsEgress");
+        if (egressNode.isArray()) {
+            sg.setIpPermissionsEgress(parseIpPermissions(egressNode));
+        }
+
+        // Parse Tags
+        JsonNode tagsNode = body.path("Tags");
+        if (tagsNode.isArray()) {
+            List<Tag> tags = new ArrayList<>();
+            for (JsonNode tagNode : tagsNode) {
+                String key = tagNode.path("Key").asText(null);
+                String value = tagNode.path("Value").asText("");
+                if (key != null) {
+                    Tag tag = new Tag();
+                    tag.setKey(key);
+                    tag.setValue(value);
+                    tags.add(tag);
+                }
+            }
+            sg.setTags(tags);
+        }
+
+        ec2Service.seedSecurityGroup(region, sg);
+        return 1;
+    }
+
+    private List<IpPermission> parseIpPermissions(JsonNode permissionsNode) {
+        List<IpPermission> permissions = new ArrayList<>();
+        for (JsonNode permNode : permissionsNode) {
+            IpPermission perm = new IpPermission();
+            perm.setIpProtocol(permNode.path("IpProtocol").asText(null));
+
+            if (permNode.has("FromPort") && !permNode.path("FromPort").isNull()) {
+                perm.setFromPort(permNode.path("FromPort").asInt());
+            }
+            if (permNode.has("ToPort") && !permNode.path("ToPort").isNull()) {
+                perm.setToPort(permNode.path("ToPort").asInt());
+            }
+
+            // Parse IpRanges
+            JsonNode ipRangesNode = permNode.path("IpRanges");
+            if (ipRangesNode.isArray()) {
+                List<IpRange> ipRanges = new ArrayList<>();
+                for (JsonNode rangeNode : ipRangesNode) {
+                    String cidrIp = rangeNode.path("CidrIp").asText(null);
+                    String description = rangeNode.path("Description").asText(null);
+                    ipRanges.add(new IpRange(cidrIp, description));
+                }
+                perm.setIpRanges(ipRanges);
+            }
+
+            // Parse Ipv6Ranges
+            JsonNode ipv6RangesNode = permNode.path("Ipv6Ranges");
+            if (ipv6RangesNode.isArray()) {
+                List<Ipv6Range> ipv6Ranges = new ArrayList<>();
+                for (JsonNode rangeNode : ipv6RangesNode) {
+                    String cidrIpv6 = rangeNode.path("CidrIpv6").asText(null);
+                    ipv6Ranges.add(new Ipv6Range(cidrIpv6));
+                }
+                perm.setIpv6Ranges(ipv6Ranges);
+            }
+
+            // Parse UserIdGroupPairs
+            JsonNode groupPairsNode = permNode.path("UserIdGroupPairs");
+            if (groupPairsNode.isArray()) {
+                List<UserIdGroupPair> groupPairs = new ArrayList<>();
+                for (JsonNode pairNode : groupPairsNode) {
+                    UserIdGroupPair pair = new UserIdGroupPair();
+                    pair.setGroupId(pairNode.path("GroupId").asText(null));
+                    pair.setUserId(pairNode.path("UserId").asText(null));
+                    pair.setGroupName(pairNode.path("GroupName").asText(null));
+                    groupPairs.add(pair);
+                }
+                perm.setUserIdGroupPairs(groupPairs);
+            }
+
+            permissions.add(perm);
+        }
+        return permissions;
     }
 }
