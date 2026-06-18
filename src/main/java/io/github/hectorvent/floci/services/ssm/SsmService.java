@@ -3,11 +3,13 @@ package io.github.hectorvent.floci.services.ssm;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.ssm.model.Parameter;
 import io.github.hectorvent.floci.services.ssm.model.ParameterHistory;
 import io.github.hectorvent.floci.services.ssm.model.PatchBaselineIdentity;
+import io.github.hectorvent.floci.services.ssm.model.ServiceSetting;
 import com.fasterxml.jackson.core.type.TypeReference;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -23,6 +25,7 @@ public class SsmService {
 
     private final StorageBackend<String, Parameter> parameterStore;
     private final StorageBackend<String, List<ParameterHistory>> historyStore;
+    private final StorageBackend<String, ServiceSetting> serviceSettingStore;
     private final int maxParameterHistory;
     private final RegionResolver regionResolver;
 
@@ -33,6 +36,9 @@ public class SsmService {
                         new TypeReference<>() {
                         }),
                 storageFactory.create("ssm", "ssm-history.json",
+                        new TypeReference<>() {
+                        }),
+                storageFactory.create("ssm", "ssm-service-settings.json",
                         new TypeReference<>() {
                         }),
                 config.services().ssm().maxParameterHistory(),
@@ -46,15 +52,17 @@ public class SsmService {
     SsmService(StorageBackend<String, Parameter> parameterStore,
                StorageBackend<String, List<ParameterHistory>> historyStore,
                int maxParameterHistory) {
-        this(parameterStore, historyStore, maxParameterHistory,
+        this(parameterStore, historyStore, new InMemoryStorage<>(), maxParameterHistory,
                 new RegionResolver("us-east-1", "000000000000"));
     }
 
     SsmService(StorageBackend<String, Parameter> parameterStore,
                StorageBackend<String, List<ParameterHistory>> historyStore,
+               StorageBackend<String, ServiceSetting> serviceSettingStore,
                int maxParameterHistory, RegionResolver regionResolver) {
         this.parameterStore = parameterStore;
         this.historyStore = historyStore;
+        this.serviceSettingStore = serviceSettingStore;
         this.maxParameterHistory = maxParameterHistory;
         this.regionResolver = regionResolver;
     }
@@ -240,6 +248,72 @@ public class SsmService {
             parameterStore.put(storageKey, param);
         }
         LOG.debugv("Removed tags from parameter: {0}", resourceId);
+    }
+
+    // ──────────────────────────── Service Settings ────────────────────────────
+    // SSM ServiceSettings are account-level configuration values for SSM features
+    // (e.g., /ssm/opsdata/Association, /ssm/opsitem/ssm-patchmanager).
+
+    /**
+     * Get a service setting by its SettingId.
+     * If the setting has not been explicitly set, returns a default with Status "Default".
+     */
+    public ServiceSetting getServiceSetting(String settingId, String region) {
+        String storageKey = regionKey(region, settingId);
+        return serviceSettingStore.get(storageKey)
+                .orElseGet(() -> {
+                    // Return a default setting (not yet customized)
+                    ServiceSetting defaultSetting = new ServiceSetting(settingId, "");
+                    defaultSetting.setStatus("Default");
+                    defaultSetting.setArn(regionResolver.buildArn("ssm", region, "servicesetting" + settingId));
+                    return defaultSetting;
+                });
+    }
+
+    /**
+     * Update (or create) a service setting.
+     */
+    public void updateServiceSetting(String settingId, String settingValue, String region) {
+        String storageKey = regionKey(region, settingId);
+        ServiceSetting existing = serviceSettingStore.get(storageKey).orElse(null);
+
+        ServiceSetting setting;
+        if (existing != null) {
+            setting = existing;
+            setting.setSettingValue(settingValue);
+        } else {
+            setting = new ServiceSetting(settingId, settingValue);
+        }
+        setting.setLastModifiedDate(Instant.now());
+        setting.setStatus("Customized");
+        setting.setArn(regionResolver.buildArn("ssm", region, "servicesetting" + settingId));
+
+        serviceSettingStore.put(storageKey, setting);
+        LOG.infov("Updated service setting: {0} in region {1}", settingId, region);
+    }
+
+    /**
+     * Reset a service setting to its default value.
+     */
+    public void resetServiceSetting(String settingId, String region) {
+        String storageKey = regionKey(region, settingId);
+        serviceSettingStore.delete(storageKey);
+        LOG.infov("Reset service setting: {0} in region {1}", settingId, region);
+    }
+
+    /**
+     * Seed a service setting directly (used by /_admin/seed_raw).
+     */
+    public void seedServiceSetting(String settingId, String settingValue, String status,
+                                   String arn, String region) {
+        String storageKey = regionKey(region, settingId);
+        ServiceSetting setting = new ServiceSetting(settingId, settingValue);
+        setting.setStatus(status != null ? status : "Customized");
+        setting.setArn(arn != null ? arn
+                : regionResolver.buildArn("ssm", region, "servicesetting" + settingId));
+        setting.setLastModifiedDate(Instant.now());
+        serviceSettingStore.put(storageKey, setting);
+        LOG.infov("Seeded service setting: {0} in region {1}", settingId, region);
     }
 
     // ──────────────────────────── Patch Baselines ────────────────────────────

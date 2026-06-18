@@ -27,6 +27,7 @@ import io.github.hectorvent.floci.services.ec2.model.VolumeAttachment;
 import io.github.hectorvent.floci.services.kms.KmsService;
 import io.github.hectorvent.floci.services.rds.RdsService;
 import io.github.hectorvent.floci.services.sns.SnsService;
+import io.github.hectorvent.floci.services.ssm.SsmService;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
@@ -68,6 +69,7 @@ public class SeedRawController {
     private final KmsService kmsService;
     private final Ec2Service ec2Service;
     private final RdsService rdsService;
+    private final SsmService ssmService;
     private final ObjectMapper objectMapper;
 
     @Inject
@@ -76,12 +78,14 @@ public class SeedRawController {
                              KmsService kmsService,
                              Ec2Service ec2Service,
                              RdsService rdsService,
+                             SsmService ssmService,
                              ObjectMapper objectMapper) {
         this.dynamoDbService = dynamoDbService;
         this.snsService = snsService;
         this.kmsService = kmsService;
         this.ec2Service = ec2Service;
         this.rdsService = rdsService;
+        this.ssmService = ssmService;
         this.objectMapper = objectMapper;
     }
 
@@ -100,6 +104,7 @@ public class SeedRawController {
                 case "kms" -> seedRawKms(body, resourceType, region);
                 case "ec2" -> seedRawEc2(body, resourceType, region);
                 case "rds" -> seedRawRds(body, resourceType, region);
+                case "ssm" -> seedRawSsm(body, resourceType, region);
                 default -> {
                     LOG.warnv("seed_raw: unsupported service: {0}", service);
                     yield -1;
@@ -1014,6 +1019,39 @@ public class SeedRawController {
 
         rdsService.seedDbSnapshot(snapshotId, instanceId, engine, engineVersion,
                 status, allocatedStorage, masterUsername);
+        return 1;
+    }
+
+    // ─── SSM ──────────────────────────────────────────────────────────────────
+    // Input format for service settings (from fetch_service_setting):
+    // {
+    //   "ResourceType": "AWS::SSM::ServiceSetting",
+    //   "Region": "us-east-1",
+    //   "SettingId": "/ssm/opsdata/Association",
+    //   "SettingValue": "Enabled",
+    //   "Status": "Customized"
+    // }
+
+    private int seedRawSsm(JsonNode body, String resourceType, String region) {
+        if ("AWS::SSM::ServiceSetting".equals(resourceType)) {
+            return seedRawServiceSetting(body, region);
+        }
+        LOG.warnv("seed_raw/ssm: unsupported ResourceType: {0}", resourceType);
+        return 0;
+    }
+
+    private int seedRawServiceSetting(JsonNode body, String region) {
+        String settingId = body.path("SettingId").asText(null);
+        if (settingId == null || settingId.isEmpty()) {
+            LOG.warn("seed_raw/ssm: missing SettingId in payload");
+            return 0;
+        }
+
+        String settingValue = body.path("SettingValue").asText("");
+        String status = body.path("Status").asText("Customized");
+        String arn = body.path("ARN").asText(null);
+
+        ssmService.seedServiceSetting(settingId, settingValue, status, arn, region);
         return 1;
     }
 }

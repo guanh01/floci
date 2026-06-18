@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.ssm.model.Parameter;
 import io.github.hectorvent.floci.services.ssm.model.ParameterHistory;
+import io.github.hectorvent.floci.services.ssm.model.ServiceSetting;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -145,5 +146,90 @@ class SsmServiceTest {
         assertEquals(5, history.size());
         assertEquals("v3", history.get(0).getValue());
         assertEquals("v7", history.get(4).getValue());
+    }
+
+    // ── Service Setting Tests ─────────────────────────────────────────────────
+
+    @Test
+    void getServiceSettingReturnsDefaultWhenNotSet() {
+        String region = "us-east-1";
+        ServiceSetting setting = ssmService.getServiceSetting("/ssm/opsdata/Association", region);
+
+        assertEquals("/ssm/opsdata/Association", setting.getSettingId());
+        assertEquals("", setting.getSettingValue());
+        assertEquals("Default", setting.getStatus());
+    }
+
+    @Test
+    void updateAndGetServiceSetting() {
+        String region = "us-east-1";
+        ssmService.updateServiceSetting("/ssm/opsdata/Association", "Enabled", region);
+
+        ServiceSetting setting = ssmService.getServiceSetting("/ssm/opsdata/Association", region);
+        assertEquals("/ssm/opsdata/Association", setting.getSettingId());
+        assertEquals("Enabled", setting.getSettingValue());
+        assertEquals("Customized", setting.getStatus());
+        assertNotNull(setting.getLastModifiedDate());
+        assertNotNull(setting.getArn());
+    }
+
+    @Test
+    void updateServiceSettingOverwritesExisting() {
+        String region = "us-east-1";
+        ssmService.updateServiceSetting("/ssm/opsdata/Association", "Enabled", region);
+        ssmService.updateServiceSetting("/ssm/opsdata/Association", "Disabled", region);
+
+        ServiceSetting setting = ssmService.getServiceSetting("/ssm/opsdata/Association", region);
+        assertEquals("Disabled", setting.getSettingValue());
+        assertEquals("Customized", setting.getStatus());
+    }
+
+    @Test
+    void resetServiceSettingRestoresDefault() {
+        String region = "us-east-1";
+        ssmService.updateServiceSetting("/ssm/opsdata/Association", "Enabled", region);
+        ssmService.resetServiceSetting("/ssm/opsdata/Association", region);
+
+        ServiceSetting setting = ssmService.getServiceSetting("/ssm/opsdata/Association", region);
+        assertEquals("Default", setting.getStatus());
+        assertEquals("", setting.getSettingValue());
+    }
+
+    @Test
+    void multipleServiceSettingsAreIndependent() {
+        String region = "us-east-1";
+        ssmService.updateServiceSetting("/ssm/opsdata/Association", "Enabled", region);
+        ssmService.updateServiceSetting("/ssm/opsitem/ssm-patchmanager", "Enabled", region);
+
+        ServiceSetting s1 = ssmService.getServiceSetting("/ssm/opsdata/Association", region);
+        ServiceSetting s2 = ssmService.getServiceSetting("/ssm/opsitem/ssm-patchmanager", region);
+
+        assertEquals("Enabled", s1.getSettingValue());
+        assertEquals("Enabled", s2.getSettingValue());
+    }
+
+    @Test
+    void serviceSettingsAreRegionScoped() {
+        ssmService.updateServiceSetting("/ssm/opsdata/Association", "Enabled", "us-east-1");
+
+        ServiceSetting east = ssmService.getServiceSetting("/ssm/opsdata/Association", "us-east-1");
+        ServiceSetting west = ssmService.getServiceSetting("/ssm/opsdata/Association", "us-west-2");
+
+        assertEquals("Enabled", east.getSettingValue());
+        assertEquals("Customized", east.getStatus());
+        assertEquals("", west.getSettingValue());
+        assertEquals("Default", west.getStatus());
+    }
+
+    @Test
+    void seedServiceSetting() {
+        String region = "us-east-1";
+        ssmService.seedServiceSetting("/ssm/opsdata/Association", "Enabled", "Customized",
+                "arn:aws:ssm:us-east-1:123456789012:servicesetting/ssm/opsdata/Association", region);
+
+        ServiceSetting setting = ssmService.getServiceSetting("/ssm/opsdata/Association", region);
+        assertEquals("Enabled", setting.getSettingValue());
+        assertEquals("Customized", setting.getStatus());
+        assertEquals("arn:aws:ssm:us-east-1:123456789012:servicesetting/ssm/opsdata/Association", setting.getArn());
     }
 }
