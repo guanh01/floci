@@ -25,6 +25,7 @@ import io.github.hectorvent.floci.services.ec2.model.Volume;
 import io.github.hectorvent.floci.services.ec2.model.Tag;
 import io.github.hectorvent.floci.services.ec2.model.VolumeAttachment;
 import io.github.hectorvent.floci.services.kms.KmsService;
+import io.github.hectorvent.floci.services.rds.RdsService;
 import io.github.hectorvent.floci.services.sns.SnsService;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -66,6 +67,7 @@ public class SeedRawController {
     private final SnsService snsService;
     private final KmsService kmsService;
     private final Ec2Service ec2Service;
+    private final RdsService rdsService;
     private final ObjectMapper objectMapper;
 
     @Inject
@@ -73,11 +75,13 @@ public class SeedRawController {
                              SnsService snsService,
                              KmsService kmsService,
                              Ec2Service ec2Service,
+                             RdsService rdsService,
                              ObjectMapper objectMapper) {
         this.dynamoDbService = dynamoDbService;
         this.snsService = snsService;
         this.kmsService = kmsService;
         this.ec2Service = ec2Service;
+        this.rdsService = rdsService;
         this.objectMapper = objectMapper;
     }
 
@@ -95,6 +99,7 @@ public class SeedRawController {
                 case "sns" -> seedRawSns(body, resourceType, region);
                 case "kms" -> seedRawKms(body, resourceType, region);
                 case "ec2" -> seedRawEc2(body, resourceType, region);
+                case "rds" -> seedRawRds(body, resourceType, region);
                 default -> {
                     LOG.warnv("seed_raw: unsupported service: {0}", service);
                     yield -1;
@@ -901,5 +906,114 @@ public class SeedRawController {
             permissions.add(perm);
         }
         return permissions;
+    }
+
+    // ─── RDS ──────────────────────────────────────────────────────────────────
+    // Input format for DB instances (from fetch_db_instance — raw boto3 DescribeDBInstances[0]):
+    // {
+    //   "ResourceType": "AWS::RDS::DBInstance",
+    //   "Region": "us-east-1",
+    //   "DBInstanceIdentifier": "my-db",
+    //   "DBInstanceStatus": "available",
+    //   "Engine": "mysql",
+    //   "EngineVersion": "8.0.35",
+    //   "MasterUsername": "admin",
+    //   "DBInstanceClass": "db.t3.micro",
+    //   "AllocatedStorage": 20,
+    //   ...
+    // }
+    //
+    // Input format for DB clusters (from fetch_db_cluster — raw boto3 DescribeDBClusters[0]):
+    // {
+    //   "ResourceType": "AWS::RDS::DBCluster",
+    //   "Region": "us-east-1",
+    //   "DBClusterIdentifier": "my-cluster",
+    //   "Status": "available",
+    //   "Engine": "aurora-mysql",
+    //   "EngineVersion": "8.0.mysql_aurora.3.04.1",
+    //   "MasterUsername": "admin",
+    //   ...
+    // }
+    //
+    // Input format for DB snapshots (from fetch_db_snapshot — raw boto3 DescribeDBSnapshots[0]):
+    // {
+    //   "ResourceType": "AWS::RDS::DBSnapshot",
+    //   "Region": "us-east-1",
+    //   "DBSnapshotIdentifier": "my-snapshot",
+    //   "DBInstanceIdentifier": "my-db",
+    //   "Engine": "mysql",
+    //   "EngineVersion": "8.0.35",
+    //   "Status": "available",
+    //   "AllocatedStorage": 20,
+    //   "MasterUsername": "admin",
+    //   ...
+    // }
+
+    private int seedRawRds(JsonNode body, String resourceType, String region) {
+        if ("AWS::RDS::DBInstance".equals(resourceType)) {
+            return seedRawDbInstance(body, region);
+        }
+        if ("AWS::RDS::DBCluster".equals(resourceType)) {
+            return seedRawDbCluster(body, region);
+        }
+        if ("AWS::RDS::DBSnapshot".equals(resourceType)) {
+            return seedRawDbSnapshot(body, region);
+        }
+        LOG.warnv("seed_raw/rds: unsupported ResourceType: {0}", resourceType);
+        return 0;
+    }
+
+    private int seedRawDbInstance(JsonNode body, String region) {
+        String id = body.path("DBInstanceIdentifier").asText(null);
+        if (id == null || id.isEmpty()) {
+            LOG.warn("seed_raw/rds: missing DBInstanceIdentifier in payload");
+            return 0;
+        }
+
+        String engine = body.path("Engine").asText("mysql");
+        String engineVersion = body.path("EngineVersion").asText(null);
+        String dbInstanceClass = body.path("DBInstanceClass").asText("db.t3.micro");
+        String masterUsername = body.path("MasterUsername").asText("admin");
+        int allocatedStorage = body.path("AllocatedStorage").asInt(20);
+        String status = body.path("DBInstanceStatus").asText("available");
+
+        rdsService.seedDbInstance(id, engine, engineVersion, dbInstanceClass,
+                masterUsername, allocatedStorage, status);
+        return 1;
+    }
+
+    private int seedRawDbCluster(JsonNode body, String region) {
+        String id = body.path("DBClusterIdentifier").asText(null);
+        if (id == null || id.isEmpty()) {
+            LOG.warn("seed_raw/rds: missing DBClusterIdentifier in payload");
+            return 0;
+        }
+
+        String engine = body.path("Engine").asText("aurora-mysql");
+        String engineVersion = body.path("EngineVersion").asText(null);
+        String masterUsername = body.path("MasterUsername").asText("admin");
+        String status = body.path("Status").asText("available");
+
+        rdsService.seedDbCluster(id, engine, engineVersion, masterUsername, status);
+        return 1;
+    }
+
+    private int seedRawDbSnapshot(JsonNode body, String region) {
+        String snapshotId = body.path("DBSnapshotIdentifier").asText(null);
+        if (snapshotId == null || snapshotId.isEmpty()) {
+            LOG.warn("seed_raw/rds: missing DBSnapshotIdentifier in payload");
+            return 0;
+        }
+
+        String instanceId = body.path("DBInstanceIdentifier").asText("");
+        String engine = body.path("Engine").asText("mysql");
+        String engineVersion = body.path("EngineVersion").asText(null);
+        String status = body.path("Status").asText("available");
+        int allocatedStorage = body.path("AllocatedStorage").asInt(20);
+        String masterUsername = body.path("MasterUsername").asText("admin");
+
+        rdsService.seedDbSnapshot(snapshotId, instanceId, engine, engineVersion,
+                status, allocatedStorage, masterUsername);
+        return 1;
     }
 }

@@ -440,6 +440,43 @@ class RdsServiceTest {
     }
 
     @Test
+    void seedDbInstanceThenDescribeReturnsSeededInstance() {
+        rdsService.seedDbInstance("cloudrail-demo-db", "mysql", "8.0.35",
+                "db.t3.micro", "admin", 20, "available");
+
+        DbInstance found = rdsService.getDbInstance("cloudrail-demo-db");
+        assertNotNull(found);
+        assertEquals("cloudrail-demo-db", found.getDbInstanceIdentifier());
+        assertEquals(DatabaseEngine.MYSQL, found.getEngine());
+        assertEquals("8.0.35", found.getEngineVersion());
+        assertEquals("db.t3.micro", found.getDbInstanceClass());
+        assertEquals("admin", found.getMasterUsername());
+        assertEquals(20, found.getAllocatedStorage());
+        assertEquals(io.github.hectorvent.floci.services.rds.model.DbInstanceStatus.AVAILABLE, found.getStatus());
+        assertNotNull(found.getDbiResourceId());
+        assertNotNull(found.getDbInstanceArn());
+    }
+
+    @Test
+    void seedDbInstanceThenListReturnsSeededInstance() {
+        rdsService.seedDbInstance("cloudrail-demo-db", "mysql", "8.0.35",
+                "db.t3.micro", "admin", 20, "available");
+
+        Collection<DbInstance> result = rdsService.listDbInstances("cloudrail-demo-db");
+        assertEquals(1, result.size());
+        assertEquals("cloudrail-demo-db", result.iterator().next().getDbInstanceIdentifier());
+    }
+
+    @Test
+    void seedDbInstanceThenStopTransitionsToStopped() {
+        rdsService.seedDbInstance("cloudrail-demo-db", "mysql", "8.0.35",
+                "db.t3.micro", "admin", 20, "available");
+
+        DbInstance stopped = rdsService.stopDbInstance("cloudrail-demo-db");
+        assertEquals(io.github.hectorvent.floci.services.rds.model.DbInstanceStatus.STOPPED, stopped.getStatus());
+    }
+
+    @Test
     void restorePersistedRuntimeRestartsStandaloneInstanceWithSameVolumeAndProxyPort() {
         StorageBackend<String, DbInstance> instances = new InMemoryStorage<>();
         StorageBackend<String, DbCluster> clusters = new InMemoryStorage<>();
